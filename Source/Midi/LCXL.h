@@ -88,8 +88,13 @@ private:
     }
 
     // ---- entrée MIDI (thread MIDI) ----
-    void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override
+    void handleIncomingMidiMessage (juce::MidiInput* src, const juce::MidiMessage& m) override
     {
+        // garde stricte : seul un Launch Control XL pilote le looper.
+        // Un DDJ/autre contrôleur sélectionné par erreur est ignoré (ses CC
+        // recouvrent les nôtres et mettraient le bazar dans les potards).
+        if (src == nullptr || ! src->getName().containsIgnoreCase ("Launch Control XL"))
+            return;
         const auto* raw = m.getRawData();
         if (m.getRawDataSize() < 3) return;
         const int st = raw[0], d1 = raw[1], d2 = raw[2];
