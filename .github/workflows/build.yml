@@ -11,23 +11,41 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: SDK ASIO (Steinberg)
-        id: asio
         shell: pwsh
         continue-on-error: true
         run: |
-          curl.exe -L -o asiosdk.zip "https://www.steinberg.net/asiosdk"
-          Expand-Archive asiosdk.zip -DestinationPath asiosdk_x
+          $ok = $false
+          try {
+            curl.exe -L --fail -o asiosdk.zip "https://www.steinberg.net/asiosdk"
+            Expand-Archive asiosdk.zip -DestinationPath asiosdk_x -ErrorAction Stop
+            $ok = $true
+          } catch { Write-Host "URL canonique KO, tentative lien direct" }
+          if (-not $ok) {
+            curl.exe -L --fail -o asiosdk.zip "https://download.steinberg.net/sdk_downloads/asiosdk_2.3.3_2019-06-14.zip"
+            Expand-Archive asiosdk.zip -DestinationPath asiosdk_x -Force
+          }
           $dir = Get-ChildItem asiosdk_x -Directory | Select-Object -First 1
-          echo "ASIOSDK_DIR=$($dir.FullName)" >> $env:GITHUB_ENV
-          echo "ok=1" >> $env:GITHUB_OUTPUT
+          if (Test-Path "$($dir.FullName)\common\iasiodrv.h") {
+            echo "ASIOSDK_DIR=$($dir.FullName)" >> $env:GITHUB_ENV
+            Write-Host "SDK ASIO OK : $($dir.FullName)"
+          } else {
+            Write-Host "SDK ASIO introuvable — le build sortira sans ASIO"
+          }
+
+      - name: WebView2 (nuget, version requise par JUCE 8.0.15)
+        run: nuget install Microsoft.Web.WebView2 -Version 1.0.3485.44 -OutputDirectory nuget
 
       - name: Configure (ASIO si dispo)
         shell: pwsh
         run: |
+          # JUCE_WEBVIEW2_PACKAGE_LOCATION = dossier PARENT contenant *Microsoft.Web.WebView2*
+          $wv2 = "${{ github.workspace }}\nuget"
           if ($env:ASIOSDK_DIR) {
-            cmake -B build -DCMAKE_BUILD_TYPE=Release -DESSAIM_ASIO=ON
+            Write-Host "Configure AVEC ASIO"
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DESSAIM_ASIO=ON -DJUCE_WEBVIEW2_PACKAGE_LOCATION="$wv2"
           } else {
-            cmake -B build -DCMAKE_BUILD_TYPE=Release
+            Write-Host "Configure SANS ASIO"
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DJUCE_WEBVIEW2_PACKAGE_LOCATION="$wv2"
           }
 
       - name: Build
@@ -39,7 +57,7 @@ jobs:
         run: |
           curl.exe -L -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip"
           Expand-Archive pluginval.zip -DestinationPath pv
-          $vst3 = Get-ChildItem -Recurse build -Filter "L'ESSAIM.vst3" -Directory | Select-Object -First 1
+          $vst3 = Get-ChildItem -Recurse build -Filter "LESSAIM.vst3" -Directory | Select-Object -First 1
           & pv\pluginval.exe --strictness-level 5 --validate "$($vst3.FullName)"
 
       - uses: actions/upload-artifact@v4
@@ -65,7 +83,7 @@ jobs:
         run: |
           curl -L -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip"
           unzip -q pluginval.zip
-          vst3=$(find build -type d -name "L'ESSAIM.vst3" | head -1)
+          vst3=$(find build -type d -name "LESSAIM.vst3" | head -1)
           ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "$vst3" || true
 
       - uses: actions/upload-artifact@v4
