@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>L'ESSAIM — Looper ×8 · Paye Ta Ruche</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d0b08; --panel:#16120c; --panel2:#1c1710; --cell:#221b11;
+  --line:rgba(255,190,80,.09); --line2:rgba(255,190,80,.16);
+  --honey:#ffb02e; --honey-deep:#c97b12; --wax:#f2e3c2; --dim:#9b8d70;
+  --rec:#ff4d3d; --play:#58e089; --amber:#ffb02e;
+  --r:10px;
+}
+*{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+html,body{height:100%;}
+body{
+  background:var(--bg);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'%3E%3Cpath d='M28 2 52 16v28L28 58 4 44V16Z M28 50 52 64v28L28 106 4 92V64Z M0-14 24 0v28L0 42-24 14V-14Z M56-14 80 0v28L56 42 32 28V0Z' fill='none' stroke='%23ffb02e' stroke-opacity='0.035' stroke-width='1'/%3E%3C/svg%3E");
+  color:var(--wax);
+  font-family:"Space Grotesk",system-ui,sans-serif;
+  font-size:14px;
+  min-height:100%;
+  overflow-x:auto;
+}
+::selection{background:var(--honey); color:#100c05;}
+button{font-family:inherit; color:inherit; background:none; border:none; cursor:pointer;}
+button:focus-visible, select:focus-visible, input:focus-visible{outline:2px solid var(--honey); outline-offset:2px;}
+select,input[type=number]{
+  background:var(--cell); color:var(--wax); border:1px solid var(--line2);
+  border-radius:6px; padding:4px 6px; font-family:"JetBrains Mono",monospace; font-size:11px;
+}
+
+/* ---------- overlay démarrage ---------- */
+#boot{
+  position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center;
+  background:rgba(13,11,8,.72); backdrop-filter:blur(9px);
+}
+#boot .card{ text-align:center; padding:40px 52px; }
+#boot h1{ font-family:"Unbounded",sans-serif; font-weight:700; font-size:42px; letter-spacing:.04em; color:var(--honey);}
+#boot .sub{ font-family:"JetBrains Mono",monospace; font-size:11px; letter-spacing:.34em; color:var(--dim); margin-top:8px;}
+#boot button{
+  margin-top:34px; padding:15px 34px; border-radius:999px;
+  background:var(--honey); color:#140e03; font-weight:600; font-size:15px; letter-spacing:.02em;
+  box-shadow:0 0 0 1px rgba(255,176,46,.4), 0 8px 34px rgba(255,176,46,.25);
+  transition:transform .12s ease;
+}
+#boot button:hover{ transform:translateY(-1px);}
+#boot .hint{ margin-top:16px; font-size:12px; color:var(--dim);}
+
+/* ---------- header ---------- */
+header{
+  display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+  padding:14px 22px; border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg, rgba(255,176,46,.04), transparent);
+}
+.logo{ display:flex; flex-direction:column; gap:2px; margin-right:6px;}
+.logo b{ font-family:"Unbounded",sans-serif; font-weight:700; font-size:21px; letter-spacing:.03em; color:var(--honey);}
+.logo span{ font-family:"JetBrains Mono",monospace; font-size:9px; letter-spacing:.3em; color:var(--dim);}
+.hgroup{ display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--line); border-radius:var(--r); background:var(--panel);}
+.hgroup .lbl{ font-family:"JetBrains Mono",monospace; font-size:9px; letter-spacing:.18em; color:var(--dim);}
+.tgl{
+  padding:6px 12px; border-radius:7px; border:1px solid var(--line2);
+  font-family:"JetBrains Mono",monospace; font-size:11px; letter-spacing:.08em; color:var(--dim);
+  transition:all .15s ease;
+}
+.tgl.on{ background:var(--honey); border-color:var(--honey); color:#140e03; font-weight:600; box-shadow:0 0 14px rgba(255,176,46,.35);}
+.danger{ border-color:rgba(255,77,61,.4); color:#e8a49d;}
+.danger:hover{ background:rgba(255,77,61,.12);}
+#midiChip{ display:flex; align-items:center; gap:8px; margin-left:auto;}
+#midiChip .dot{ width:8px; height:8px; border-radius:50%; background:#5a5142; box-shadow:0 0 6px transparent; transition:all .3s;}
+#midiChip.ok .dot{ background:var(--play); box-shadow:0 0 8px var(--play);}
+#midiChip .name{ font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--dim); max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+#midiChip.ok .name{ color:var(--wax);}
+.minivu{ width:46px; height:6px; border-radius:3px; background:#0a0805; overflow:hidden; border:1px solid var(--line);}
+.minivu i{ display:block; height:100%; width:100%; transform-origin:left; transform:scaleX(0);
+  background:linear-gradient(90deg, var(--play), var(--honey) 70%, var(--rec)); }
+input#comp{ width:56px; text-align:right;}
+
+/* ---------- console ---------- */
+main{ padding:20px 22px 8px; }
+.deck{
+  display:grid; grid-template-columns:118px repeat(8, minmax(96px,1fr)); gap:10px;
+  max-width:1320px; margin:0 auto;
+}
+.col{
+  display:grid; grid-template-rows:66px 78px 78px 78px 172px 40px 40px;
+  gap:9px; align-items:center; justify-items:center;
+  padding:12px 8px 14px; border-radius:14px;
+}
+.strip{ background:linear-gradient(180deg, var(--panel2), var(--panel)); border:1px solid var(--line);
+  transition:border-color .25s ease, box-shadow .25s ease;}
+.strip[data-state="REC"]{ border-color:rgba(255,77,61,.55); box-shadow:0 0 22px rgba(255,77,61,.13) inset;}
+.strip[data-state="PLAY"]{ border-color:rgba(88,224,137,.35);}
+.strip[data-state="PENDING"]{ border-color:rgba(255,176,46,.5);}
+.strip[data-state="WAIT"]{ border-color:rgba(255,176,46,.35);}
+
+/* légende */
+.legend{ background:transparent; border:1px dashed var(--line); }
+.legend .cell-lbl{ font-family:"JetBrains Mono",monospace; font-size:9px; letter-spacing:.2em; color:var(--dim); text-align:center;}
+.legend .rowsel{ display:flex; flex-direction:column; gap:5px; align-items:center; width:100%;}
+.legend .rowsel .tag{
+  font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:600; color:var(--honey);
+  border:1px solid var(--line2); border-radius:4px; padding:1px 7px;
+}
+.legend select{ width:96px; }
+
+/* alvéole waveform */
+.hex{
+  width:100%; height:100%; position:relative; background:var(--cell);
+  clip-path:polygon(12px 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 12px 100%, 0 50%);
+  border:1px solid var(--line);
+  overflow:hidden;
+}
+.hex canvas{ position:absolute; inset:0; width:100%; height:100%;}
+.hex .ph{ position:absolute; top:0; bottom:0; left:0; width:2px; background:var(--honey);
+  box-shadow:0 0 8px var(--honey); opacity:0; }
+.hex .num{
+  position:absolute; top:3px; left:14px; font-family:"Unbounded",sans-serif; font-size:9px; color:var(--dim); opacity:.8;
+}
+.hex .chip{
+  position:absolute; bottom:3px; right:13px; font-family:"JetBrains Mono",monospace; font-size:9px;
+  letter-spacing:.14em; color:var(--dim);
+}
+.strip[data-state="REC"] .chip{ color:var(--rec);}
+.strip[data-state="PLAY"] .chip{ color:var(--play);}
+.strip[data-state="PENDING"] .chip{ color:var(--amber);}
+.strip[data-state="WAIT"] .chip{ color:var(--amber); animation:waitPulse 1.2s ease-in-out infinite;}
+.strip[data-state="STOP"] .chip{ color:var(--amber);}
+.strip[data-state="STOP"] .hex canvas{ opacity:.4;}
+
+/* potards */
+.kcell{ display:flex; flex-direction:column; align-items:center; gap:4px; touch-action:none;}
+.knob{ --p:.5; --c:var(--honey); width:48px; height:48px; border-radius:50%; position:relative; cursor:ns-resize;
+  background:radial-gradient(circle at 50% 38%, #2b2418, #171208 72%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06), 0 3px 8px rgba(0,0,0,.5);
+}
+.knob .ring{ position:absolute; inset:-5px; border-radius:50%;
+  background:conic-gradient(from 225deg, var(--c) calc(var(--p)*270deg), rgba(255,235,200,.08) calc(var(--p)*270deg) 270deg, transparent 270deg);
+  -webkit-mask:radial-gradient(closest-side, transparent 76%, #000 77%);
+  mask:radial-gradient(closest-side, transparent 76%, #000 77%);
+}
+.knob .ptr{ position:absolute; inset:4px; transform:rotate(calc(var(--p)*270deg - 135deg));}
+.knob .ptr::before{ content:""; position:absolute; top:2px; left:calc(50% - 1px); width:2px; height:13px;
+  background:var(--wax); border-radius:2px;}
+.knob .ghost{ position:absolute; inset:-5px; transform:rotate(calc(var(--g)*270deg - 135deg)); opacity:0;}
+.knob .ghost::before{ content:""; position:absolute; top:-1px; left:calc(50% - 2.5px); width:5px; height:5px;
+  border-radius:50%; background:var(--honey); opacity:.65;}
+.knob.await .ghost{ opacity:1;}
+.kval{ font-family:"JetBrains Mono",monospace; font-size:9px; color:var(--dim); min-height:11px;}
+
+/* fader */
+.fcell{ display:flex; align-items:stretch; gap:7px; height:160px; touch-action:none;}
+.fader{ width:34px; position:relative; cursor:ns-resize;}
+.fader .rail{ position:absolute; left:calc(50% - 2px); top:4px; bottom:4px; width:4px; border-radius:2px;
+  background:#0a0805; border:1px solid var(--line);}
+.fader .fill{ position:absolute; left:calc(50% - 1px); bottom:5px; width:2px; border-radius:2px;
+  background:var(--honey-deep); height:calc(var(--p)*146px);}
+.fader .cap{ position:absolute; left:0; width:34px; height:16px; border-radius:4px;
+  bottom:calc(var(--p)*138px);
+  background:linear-gradient(180deg,#3a3020,#241c0f);
+  border:1px solid var(--line2); box-shadow:0 2px 6px rgba(0,0,0,.55);
+}
+.fader .cap::after{ content:""; position:absolute; left:4px; right:4px; top:7px; height:2px; background:var(--honey); border-radius:1px; opacity:.9;}
+.fader .gtick{ position:absolute; left:2px; width:30px; height:2px; background:var(--honey); opacity:0; bottom:calc(var(--g)*138px + 7px);}
+.fader.await .gtick{ opacity:.55;}
+.vupair{ display:flex; flex-direction:column; justify-content:space-between; align-items:center;}
+.vu{ width:6px; flex:1; border-radius:3px; background:#0a0805; border:1px solid var(--line); overflow:hidden; display:flex; align-items:flex-end;}
+.vu i{ display:block; width:100%; height:100%; transform-origin:bottom; transform:scaleY(0);
+  background:linear-gradient(0deg, var(--play), var(--honey) 72%, var(--rec));}
+.fdb{ font-family:"JetBrains Mono",monospace; font-size:8px; color:var(--dim); margin-top:3px;}
+
+/* boutons piste */
+.pbtn{ width:100%; height:36px; border-radius:8px; border:1px solid var(--line2);
+  font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:600; letter-spacing:.14em; color:var(--dim);
+  background:var(--cell); transition:all .12s ease; position:relative;
+}
+.pbtn:active{ transform:translateY(1px);}
+.strip[data-state="EMPTY"] .rec-b:hover{ border-color:var(--rec); color:var(--rec);}
+.strip[data-state="REC"] .rec-b{ background:var(--rec); border-color:var(--rec); color:#1a0503; box-shadow:0 0 16px rgba(255,77,61,.5);}
+.strip[data-state="REC"].closing .rec-b{ animation:blinkR .5s steps(2) infinite;}
+.strip[data-state="PENDING"] .rec-b{ border-color:var(--amber); color:var(--amber); animation:blinkA .5s steps(2) infinite;}
+.strip[data-state="PLAY"] .rec-b{ background:rgba(88,224,137,.14); border-color:var(--play); color:var(--play);}
+.strip[data-state="STOP"] .rec-b{ border-color:var(--amber); color:var(--amber);}
+@keyframes blinkR{ 50%{ box-shadow:none; background:rgba(255,77,61,.25); color:var(--rec);} }
+@keyframes blinkA{ 50%{ border-color:var(--line2); color:var(--dim);} }
+.clr-b:hover{ border-color:var(--rec); color:var(--rec);}
+.strip.hasbuf .clr-b{ color:#c97e76; border-color:rgba(255,77,61,.35);}
+
+/* footer */
+footer{ max-width:1320px; margin:10px auto 30px; padding:0 22px;}
+details{ border:1px solid var(--line); border-radius:var(--r); background:var(--panel); padding:12px 16px;}
+summary{ cursor:pointer; font-family:"JetBrains Mono",monospace; font-size:10px; letter-spacing:.22em; color:var(--dim);}
+details .help{ margin-top:10px; font-size:12.5px; line-height:1.75; color:#cdbfa0;}
+details .help b{ color:var(--honey); font-weight:600;}
+kbd{ font-family:"JetBrains Mono",monospace; font-size:10px; background:var(--cell); border:1px solid var(--line2);
+  border-radius:4px; padding:1px 5px; color:var(--wax);}
+
+/* mini-menus d'assignation + piste d'entrée sélectionnée */
+.cellSel{ width:90%; max-width:72px; font-family:"JetBrains Mono",monospace; font-size:9px; letter-spacing:.08em;
+  background:var(--cell); color:var(--dim); border:1px solid transparent; border-radius:5px;
+  padding:1px 2px; text-align:center; cursor:pointer;}
+.cellSel:hover, .cellSel:focus{ color:var(--honey); border-color:var(--line2); outline:none;}
+.strip .hex{ cursor:pointer;}
+.strip.sel{ box-shadow:0 0 0 1px rgba(255,176,46,.55), 0 0 24px rgba(255,176,46,.12); border-radius:12px;}
+.strip.sel .num{ color:var(--honey);}
+.strip.sel .num::after{ content:" IN"; font-size:8px; letter-spacing:.18em; vertical-align:top;}
+
+/* panneau audio */
+.apback{ position:fixed; inset:0; z-index:60; background:rgba(8,6,3,.72); backdrop-filter:blur(6px);
+  display:flex; align-items:center; justify-content:center; padding:20px;}
+.apback.hidden{ display:none;}
+.apanel{ width:min(440px, 94vw); background:linear-gradient(180deg, #171310, #100d09);
+  border:1px solid var(--line2); border-radius:16px; padding:18px 20px 16px;
+  box-shadow:0 24px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(255,176,46,.06) inset;}
+.aphead{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;
+  font-family:"Unbounded",sans-serif; font-size:13px; letter-spacing:.14em; color:var(--wax);}
+.apgrp{ border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px; background:rgba(0,0,0,.18);}
+.aplbl{ font-family:"JetBrains Mono",monospace; font-size:10px; letter-spacing:.22em; color:var(--honey); margin-bottom:8px;}
+.aplbl2{ font-family:"JetBrains Mono",monospace; font-size:9px; letter-spacing:.18em; color:var(--dim); min-width:56px;}
+.apsel{ width:100%; margin-bottom:8px;}
+.aprow{ display:flex; align-items:center; gap:10px; margin-top:4px;}
+.apvu{ flex:1; height:8px;}
+.seg{ display:flex; gap:0; border:1px solid var(--line2); border-radius:8px; overflow:hidden;}
+.segb{ font-family:"JetBrains Mono",monospace; font-size:9px; letter-spacing:.12em; padding:5px 10px;
+  background:transparent; color:var(--dim); border:0; border-right:1px solid var(--line); cursor:pointer;}
+.segb:last-child{ border-right:0;}
+.segb.on{ background:rgba(255,176,46,.14); color:var(--honey);}
+.apnote{ font-size:10px; color:var(--dim); line-height:1.5;}
+.apinfo{ font-family:"JetBrains Mono",monospace; font-size:9.5px; color:var(--dim); letter-spacing:.06em;
+  padding:2px 2px 10px; line-height:1.7;}
+.apfoot{ justify-content:space-between;}
+
+/* toasts */
+#toasts{ position:fixed; bottom:18px; left:50%; transform:translateX(-50%); z-index:120;
+  display:flex; flex-direction:column; gap:8px; align-items:center; pointer-events:none;}
+.toast{ background:var(--panel2); border:1px solid var(--line2); border-radius:9px; padding:9px 16px;
+  font-size:12.5px; color:var(--wax); box-shadow:0 8px 30px rgba(0,0,0,.5);
+  animation:tin .2s ease; }
+.toast.warn{ border-color:rgba(255,77,61,.5);}
+@keyframes tin{ from{ opacity:0; transform:translateY(8px);} }
+@keyframes waitPulse{ 0%,100%{ opacity:1;} 50%{ opacity:.35;} }
+
+@media (prefers-reduced-motion:reduce){
+  *{ animation:none !important; transition:none !important;}
+}
+</style>
+</head>
+<body>
+
+<div id="boot">
+  <div class="card">
+    <h1>L'ESSAIM</h1>
+    <div class="sub">PAYE TA RUCHE · LOOPER ×8 · LAUNCH CONTROL XL</div>
+    <button id="bootBtn">Démarrer l'audio</button>
+    <div class="hint">Chrome conseillé — autorise le micro et le MIDI.</div>
+  </div>
+</div>
+
+<header>
+  <div class="logo"><b>L'ESSAIM</b><span>LOOPER ×8 — PTR</span></div>
+
+  <div class="hgroup">
+    <button class="tgl" id="audioBtn" title="Configurer l'entrée et la sortie audio (cartes son)">AUDIO</button>
+    <div class="minivu" title="Niveau d'entrée"><i id="inVu"></i></div>
+    <button class="tgl" id="monBtn" title="Écouter l'entrée à travers la piste sélectionnée (attention au larsen sur enceintes)">MON</button>
+    <button class="tgl" id="autoBtn" title="Après chaque loop enregistrée, l'entrée passe à la piste suivante">AUTO→</button>
+    <button class="tgl" id="autoRecBtn" title="La piste sélectionnée s'enregistre dès qu'un son dépasse le seuil (pré-roll : l'attaque n'est pas coupée)">AUTOREC</button>
+    <input type="number" id="thresh" min="1" max="50" step="1" value="3" title="Seuil de déclenchement (%)">
+    <span class="lbl">%</span>
+  </div>
+
+  <div class="hgroup">
+    <button class="tgl on" id="syncBtn" title="La 1ère loop définit la grille ; départs/fins calés dessus">SYNC</button>
+    <span class="lbl">COMP</span>
+    <input type="number" id="comp" min="0" max="300" step="1" value="0" title="Compensation de latence d'entrée (ms)">
+    <span class="lbl">MS</span>
+  </div>
+
+  <div class="hgroup">
+    <span class="lbl">MASTER</span>
+    <div class="kcell" style="transform:scale(.72); margin:-8px -4px;">
+      <div class="knob" id="masterKnob" style="--p:.85; --c:var(--honey)">
+        <div class="ring"></div><div class="ptr"></div>
+      </div>
+    </div>
+    <div class="minivu" title="Niveau master"><i id="masterVu"></i></div>
+  </div>
+
+  <div class="hgroup">
+    <button class="tgl" id="stopAll" title="Espace">STOP ALL</button>
+    <button class="tgl danger" id="clearAll" title="Double-clic pour tout effacer">CLEAR ALL ×2</button>
+  </div>
+
+  <div id="midiChip"><span class="dot"></span><span class="name">MIDI : en attente…</span></div>
+</header>
+
+<div id="audioPanel" class="apback hidden">
+  <div class="apanel">
+    <div class="aphead"><b>CONFIG AUDIO</b><button class="tgl" id="audioClose" title="Fermer (Échap)">✕</button></div>
+
+    <div class="apgrp">
+      <div class="aplbl">AUDIO</div>
+      <div class="apnote" id="audioNote"></div>
+      <div class="aprow" style="margin-top:8px"><button class="tgl" id="asioBtn" title="Panneau natif : driver ASIO, entrées/sorties par canal, buffer, fréquence">OUVRIR LE PANNEAU AUDIO (ASIO)</button></div>
+      <div class="aprow"><span class="aplbl2">NIVEAU</span><div class="minivu apvu"><i id="inVu2"></i></div></div>
+    </div>
+
+    <div class="apgrp">
+      <div class="aplbl">MIDI — LAUNCH CONTROL XL</div>
+      <div class="aprow"><span class="aplbl2">ENTRÉE</span><select id="midiInSel" class="apsel" title="Contrôleur MIDI (détection auto par défaut)"><option value="">Auto (Launch Control XL)</option></select></div>
+      <div class="aprow"><span class="aplbl2">SORTIE</span><select id="midiOutSel" class="apsel" title="Sortie MIDI pour les LED"><option value="">Auto (Launch Control XL)</option></select></div>
+      <div class="apnote">Détection automatique du Launch Control XL ; choisis manuellement si besoin. La sortie sert aux LED. Ne l'active pas en parallèle comme surface de contrôle dans ton DAW.</div>
+    </div>
+
+    <div class="apinfo" id="apInfo"></div>
+    <div class="aprow apfoot">
+      <span class="apnote">Branche/débranche ton contrôleur : la liste se met à jour toute seule.</span>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="deck" id="deck">
+    <div class="col legend">
+      <div class="cell-lbl">PISTES<br>1 → 8</div>
+      <div class="rowsel"><span class="tag">A</span><select data-row="0" class="rowSel" title="Assigner toute la rangée A"></select></div>
+      <div class="rowsel"><span class="tag">B</span><select data-row="1" class="rowSel" title="Assigner toute la rangée B"></select></div>
+      <div class="rowsel"><span class="tag">C</span><select data-row="2" class="rowSel" title="Assigner toute la rangée C"></select></div>
+      <div class="cell-lbl">VOLUME</div>
+      <div class="cell-lbl">MESURES</div>
+      <div class="cell-lbl">REC / STOP</div>
+      <div class="cell-lbl">CLEAR</div>
+    </div>
+    <!-- strips injectés en JS -->
+  </div>
+</main>
+
+<footer>
+  <details>
+    <summary>AIDE · MAPPING · RACCOURCIS</summary>
+    <div class="help">
+      <b>AUDIO</b> — le bouton en haut à gauche ouvre la config. En <b>standalone</b>, le panneau natif donne accès au driver <b>ASIO</b> : chaque paire d'entrées/sorties de ta carte (DDJ-FLX10 compris), taille de buffer, fréquence. En <b>VST3</b>, l'audio est routé par le DAW : l'entrée du plugin est ce que tu envoies sur sa piste. La section MIDI sert à choisir le Launch Control XL si la détection auto ne suffit pas.<br>
+      <b>Hardware (Launch Control XL)</b> — n'importe quel template, le canal est détecté automatiquement.
+      Chaque potard a son effet (petit menu sous le potard) ; les menus <b>A/B/C</b> à gauche assignent toute la rangée d'un coup · Faders = volume ·
+      Boutons du haut (Track Focus) = <b>REC → loop auto → play/stop</b> · Boutons du bas (Track Control) = <b>CLEAR</b>.
+      Les potards ont un <b>soft-takeover</b> : si la position physique diffère, un point ambre indique où est le potard ; la valeur accroche quand tu croises la valeur actuelle.<br>
+      <b>Piste d'entrée</b> — la piste sélectionnée (halo ambre à l'écran, LED ambre sur son bouton bas) reçoit l'entrée : avec <b>MON</b>, tu l'entends à travers ses effets et son fader (une piste en STOP coupe aussi son monitoring). Sélection : clic sur l'alvéole, flèches ◀ ▶ du contrôleur, <kbd>←</kbd>/<kbd>→</kbd>, ou automatiquement dès que tu enregistres. <b>AUTO→</b> : après chaque loop bouclée, l'entrée avance à la piste suivante.<br>
+      <b>AUTOREC</b> — la piste sélectionnée passe en <b>ÉCOUTE</b> (chip pulsé, LED ambre douce) et l'enregistrement démarre <b>dès qu'un son dépasse le seuil</b> (%). Sans grille : départ pile sur l'attaque grâce à un pré-roll de quelques ms — rien n'est coupé. Avec grille : le son sert de déclencheur, le départ reste calé à la prochaine mesure. Appuyer sur REC pendant l'écoute force le départ immédiat. Combine avec <b>AUTO→</b> pour enchaîner les 8 pistes mains libres.<br>
+      <b>LED</b> — éteint : vide · ambre clignotant : armé (attente de la grille) · rouge : enregistrement · rouge clignotant : fin d'enregistrement programmée · vert : lecture · ambre fixe : stop (la phase continue, la reprise reste calée).<br>
+      <b>Mesures</b> — chaque piste a un sélecteur (au-dessus de REC) : <b>1/2/4/8/16/32 M</b> = l'enregistrement démarre à la prochaine mesure et <b>se termine tout seul</b> pile après ce nombre de mesures ; <b>MAN</b> = tu fermes toi-même (fin quantisée à la mesure). La <b>première</b> loop enregistrée définit la mesure : sa durée ÷ son réglage (ex. tu joues 4 mesures avec « 4 M » → la grille connaît la mesure). Flèches <b>▲ ▼</b> du contrôleur ou <kbd>↑</kbd>/<kbd>↓</kbd> : mesures de la piste sélectionnée.<br>
+      <b>SYNC</b> — départs et fins calés sur la grille de mesures. Désactive SYNC pour boucler librement.<br>
+      <b>Clavier</b> — <kbd>1</kbd>…<kbd>8</kbd> rec/stop/play · <kbd>Shift</kbd>+<kbd>1…8</kbd> clear · <kbd>←</kbd>/<kbd>→</kbd> piste d'entrée · <kbd>↑</kbd>/<kbd>↓</kbd> mesures · <kbd>Espace</kbd> stop all.<br>
+      <b>Latence</b> — si tes loops sonnent en retard par rapport au reste, monte COMP (ms) petit à petit jusqu'à ce que ça tombe juste.<br>
+      <b>Effets</b> — FILTRE : bipolaire (gauche = passe-bas, centre = neutre, droite = passe-haut) · DELAY/REVERB : départs d'effet, le delay se cale sur la grille · double-clic sur un potard = reset.
+    </div>
+  </details>
+</footer>
+
+<div id="toasts"></div>
+
+<script>
+"use strict";
+/* ================= L'ESSAIM — UI (pont JUCE) =================
+   Visuel et interactions identiques au prototype HTML.
+   Le moteur audio + MIDI vit côté C++ ; ce script :
+   - envoie les gestes : window.__JUCE__.backend.emitEvent("ui", {...})
+   - reçoit l'état 30 Hz : window.__push(state)
+   - reçoit les événements : window.__ev({toast|wave})               */
+
+const $  = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const NT = 8;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+const FX_DEFS = {
+  filter:{ label:"FILTRE", short:"FILT",  def:64, bipolar:true },
+  drive :{ label:"DRIVE",  short:"DRIVE", def:0 },
+  dly   :{ label:"DELAY",  short:"DLY",   def:0 },
+  rvb   :{ label:"REVERB", short:"RVB",   def:0 },
+  pan   :{ label:"PAN",    short:"PAN",   def:64, bipolar:true },
+  trim  :{ label:"TRIM / VOL", short:"TRIM", def:64, bipolar:true },
+};
+
+let SR = 48000;
+function hz(f){ return f >= 1000 ? (f/1000).toFixed(1) + "k" : Math.round(f) + ""; }
+function db(g){ return g <= 0.0005 ? "-inf" : ((20*Math.log10(g) >= 0 ? "+" : "") + (20*Math.log10(g)).toFixed(1)); }
+function filterFreqs(v){
+  const maxLp = Math.min(18000, SR*0.45);
+  if(v >= 58 && v < 70) return { lp:maxLp, hp:12, flat:true };
+  if(v < 58){ return { lp: 70*Math.pow(maxLp/70, v/58), hp:12, flat:false }; }
+  const u = (v - 69)/(127 - 69);
+  return { lp:maxLp, hp: 12*Math.pow(6000/12, u), flat:false };
+}
+function fmtFx(eff, v){
+  switch(eff){
+    case "filter":{ const f = filterFreqs(v); return f.flat ? "flat" : (v < 58 ? "LP " + hz(f.lp) : "HP " + hz(f.hp)); }
+    case "drive": case "dly": case "rvb": return Math.round(v/127*100) + "%";
+    case "pan":{ const p = v - 64; return p === 0 ? "C" : (p < 0 ? "L" : "R") + Math.abs(Math.round(p/63*100)); }
+    case "trim":{ const g = v <= 64 ? v/64 : 1 + (v-64)/63; return db(g) + " dB"; }
+  }
+  return v;
+}
+
+/* ---------- pont ---------- */
+const bridge = {
+  ok: !!(window.__JUCE__ && window.__JUCE__.backend && window.__JUCE__.backend.emitEvent),
+  emit(o){ if(this.ok){ try{ window.__JUCE__.backend.emitEvent("ui", o); }catch(e){} } },
+};
+
+/* ---------- toasts ---------- */
+function toast(msg, warn){
+  const d = document.createElement("div");
+  d.className = "toast" + (warn ? " warn" : "");
+  d.textContent = msg;
+  $("#toasts").appendChild(d);
+  setTimeout(()=>d.remove(), 4200);
+}
+
+/* ---------- vue pistes ---------- */
+const T = [];
+const dragLock = {};   // clé -> timestamp : l'état n'écrase pas un contrôle en cours de drag
+const locked = k => (performance.now() - (dragLock[k] || -1e9)) < 400;
+
+function bindDrag(el, onDelta){
+  let y0 = null;
+  el.addEventListener("pointerdown", e => {
+    y0 = e.clientY; el.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  el.addEventListener("pointermove", e => {
+    if(y0 === null) return;
+    const d = Math.round((y0 - e.clientY) * 0.8);
+    if(d !== 0){ onDelta(d); y0 = e.clientY; }
+  });
+  el.addEventListener("pointerup", () => y0 = null);
+  el.addEventListener("pointercancel", () => y0 = null);
+  el.addEventListener("wheel", e => { e.preventDefault(); onDelta(e.deltaY < 0 ? 3 : -3); }, { passive:false });
+}
+
+function refreshTrackKnobs(t){
+  for(let r = 0; r < 3; r++){
+    const eff = t.assign[r];
+    t.ui.knobs[r].style.setProperty("--p", t.fx[eff]/127);
+    t.ui.kvals[r].textContent = fmtFx(eff, t.fx[eff]);
+    if(t.ui.sels && document.activeElement !== t.ui.sels[r]) t.ui.sels[r].value = eff;
+  }
+}
+
+function drawWave(t){
+  const cv = t.ui.wave, g = cv.getContext("2d");
+  const w = cv.width, h = cv.height;
+  g.clearRect(0, 0, w, h);
+  if(!t.pk) return;
+  const P = t.pk.length / 2;
+  g.fillStyle = "rgba(255,176,46,.75)";
+  for(let x = 0; x < w; x++){
+    const idx = Math.min(P - 1, Math.floor(x / w * P));
+    const mn = t.pk[idx*2], mx = t.pk[idx*2 + 1];
+    const y0 = (0.5 - mx*0.48) * h, y1 = (0.5 - mn*0.48) * h;
+    g.fillRect(x, y0, 1, Math.max(1, y1 - y0));
+  }
+}
+
+function buildRowSelects(){
+  $$(".rowSel").forEach(sel => {
+    const r = +sel.dataset.row;
+    for(const k in FX_DEFS){
+      const o = document.createElement("option");
+      o.value = k; o.textContent = FX_DEFS[k].label;
+      sel.appendChild(o);
+    }
+    sel.value = ["filter","dly","rvb"][r];
+    sel.addEventListener("change", () => {
+      T.forEach(t => { t.assign[r] = sel.value; refreshTrackKnobs(t); });
+      bridge.emit({ fn:"assignRow", r, eff: sel.value });
+    });
+  });
+}
+
+function buildStrips(){
+  const deck = $("#deck");
+  for(let i = 0; i < NT; i++){
+    const t = { i, assign:["filter","dly","rvb"],
+      fx:{ filter:64, drive:0, dly:0, rvb:0, pan:64, trim:64 },
+      fadVal:102, bars:4, state:"EMPTY", closing:false, hasBuf:false,
+      pk:null, pos:0, dur:0, posTs:0 };
+    const s = document.createElement("div");
+    s.className = "col strip"; s.dataset.state = "EMPTY";
+    s.innerHTML = `
+      <div class="hex">
+        <canvas></canvas><div class="ph"></div>
+        <span class="num">${t.i + 1}</span><span class="chip">VIDE</span>
+      </div>
+      ${[0,1,2].map(r => `
+        <div class="kcell" data-row="${r}">
+          <div class="knob" style="--p:.5; --g:.5"><div class="ring"></div><div class="ptr"></div><div class="ghost"></div></div>
+          <select class="cellSel" title="Effet de ce potard"></select>
+          <span class="kval"></span>
+        </div>`).join("")}
+      <div class="fcell">
+        <div class="fader" style="--p:.8; --g:.8"><div class="rail"></div><div class="fill"></div><div class="gtick"></div><div class="cap"></div></div>
+        <div class="vupair"><div class="vu"><i></i></div><span class="fdb"></span></div>
+      </div>
+      <select class="cellSel barSel" title="Longueur du prochain enregistrement (mesures)"></select>
+      <button class="pbtn rec-b">REC</button>
+      <button class="pbtn clr-b">CLEAR</button>`;
+    deck.appendChild(s);
+
+    const cv = s.querySelector("canvas");
+    const fitCanvas = () => {
+      const r = cv.parentElement.getBoundingClientRect();
+      cv.width = Math.max(60, Math.floor(r.width * devicePixelRatio));
+      cv.height = Math.max(30, Math.floor(r.height * devicePixelRatio));
+      drawWave(t);
+    };
+
+    t.ui = {
+      strip:s, wave:cv, ph:s.querySelector(".ph"), chip:s.querySelector(".chip"),
+      knobs:[...s.querySelectorAll(".knob")].slice(0, 3),
+      kvals:[...s.querySelectorAll(".kval")],
+      fader:s.querySelector(".fader"), fdb:s.querySelector(".fdb"),
+      vu:s.querySelector(".vu i"), recB:s.querySelector(".rec-b"),
+      fit:fitCanvas,
+    };
+    fitCanvas();
+
+    t.ui.sels = [...s.querySelectorAll(".kcell .cellSel")];
+    t.ui.sels.forEach((sel, r) => {
+      for(const k in FX_DEFS){
+        const o = document.createElement("option");
+        o.value = k; o.textContent = FX_DEFS[k].short;
+        sel.appendChild(o);
+      }
+      sel.value = t.assign[r];
+      sel.addEventListener("change", () => {
+        t.assign[r] = sel.value;
+        refreshTrackKnobs(t);
+        bridge.emit({ fn:"assign", i:t.i, r, eff: sel.value });
+      });
+    });
+    s.querySelector(".hex").addEventListener("click", () => bridge.emit({ fn:"sel", i:t.i }));
+
+    t.ui.barSel = s.querySelector(".barSel");
+    [["1","1 M"],["2","2 M"],["4","4 M"],["8","8 M"],["16","16 M"],["32","32 M"],["0","MAN"]].forEach(([v,l]) => {
+      const o = document.createElement("option"); o.value = v; o.textContent = l;
+      t.ui.barSel.appendChild(o);
+    });
+    t.ui.barSel.value = String(t.bars);
+    t.ui.barSel.addEventListener("change", () => { t.bars = +t.ui.barSel.value; bridge.emit({ fn:"bars", i:t.i, v:t.bars }); });
+
+    s.querySelector(".rec-b").addEventListener("click", () => bridge.emit({ fn:"press", i:t.i }));
+    s.querySelector(".clr-b").addEventListener("click", () => bridge.emit({ fn:"clear", i:t.i }));
+
+    // potards écran (optimiste + envoi)
+    t.ui.knobs.forEach((k, r) => {
+      bindDrag(k, (dy) => {
+        const eff = t.assign[r];
+        t.fx[eff] = clamp(t.fx[eff] + dy, 0, 127);
+        dragLock["k" + r + "_" + t.i] = performance.now();
+        k.classList.remove("await");
+        refreshTrackKnobs(t);
+        bridge.emit({ fn:"fx", i:t.i, r, v:t.fx[eff] });
+      });
+      k.addEventListener("dblclick", () => {
+        const eff = t.assign[r];
+        t.fx[eff] = FX_DEFS[eff].def;
+        dragLock["k" + r + "_" + t.i] = performance.now();
+        refreshTrackKnobs(t);
+        bridge.emit({ fn:"fxDbl", i:t.i, r });
+      });
+    });
+    // fader écran
+    const applyFad = () => {
+      t.ui.fader.style.setProperty("--p", t.fadVal/127);
+      t.ui.fdb.textContent = db(Math.pow(t.fadVal/127, 1.8));
+    };
+    bindDrag(t.ui.fader, (dy) => {
+      t.fadVal = clamp(t.fadVal + dy, 0, 127);
+      dragLock["f" + t.i] = performance.now();
+      t.ui.fader.classList.remove("await");
+      applyFad();
+      bridge.emit({ fn:"fader", i:t.i, v:t.fadVal });
+    });
+    applyFad();
+    refreshTrackKnobs(t);
+    T.push(t);
+  }
+  window.addEventListener("resize", () => T.forEach(t => t.ui.fit()));
+}
+
+/* ---------- application d'état ---------- */
+const CHIP = { EMPTY:"VIDE", WAIT:"ÉCOUTE", PENDING:"ARMÉ", PLAY:"PLAY", STOP:"STOP" };
+const RECB = { EMPTY:"REC", WAIT:"GO", PENDING:"ARMÉ", PLAY:"STOP", STOP:"PLAY" };
+let lastMidiKey = "";
+
+window.__push = function(s){
+  if(!s || !s.tr) return;
+  if(s.sr) SR = s.sr;
+
+  for(let i = 0; i < NT; i++){
+    const t = T[i], d = s.tr[i];
+    t.state = d.st; t.closing = !!d.closing; t.hasBuf = !!d.hasBuf;
+    t.dur = d.dur || 0; t.pos = d.pos || 0; t.posTs = performance.now();
+
+    t.ui.strip.dataset.state = d.st;
+    t.ui.strip.classList.toggle("closing", t.closing);
+    t.ui.strip.classList.toggle("hasbuf", t.hasBuf);
+    t.ui.strip.classList.toggle("sel", i === s.sel);
+
+    let chip = d.st === "REC" ? (t.closing ? "FIN…" : "REC") : CHIP[d.st];
+    if(d.st === "REC" && d.rc > 0 && d.bars > 0)
+      chip = (t.closing ? "FIN " : "REC ") + d.rc + "/" + d.bars;
+    t.ui.chip.textContent = chip;
+    t.ui.recB.textContent = d.st === "REC" ? (t.closing ? "FIN…" : "STOP") : RECB[d.st];
+
+    for(let r = 0; r < 3; r++){
+      const eff = d.asg[r];
+      if(!locked("k" + r + "_" + i)){
+        t.assign[r] = eff;
+        t.fx[eff] = d.fx[r];
+        t.ui.knobs[r].style.setProperty("--p", d.fx[r]/127);
+        t.ui.kvals[r].textContent = fmtFx(eff, d.fx[r]);
+        if(document.activeElement !== t.ui.sels[r]) t.ui.sels[r].value = eff;
+      }
+      const g = d.gk[r];
+      if(g >= 0){ t.ui.knobs[r].style.setProperty("--g", g/127); t.ui.knobs[r].classList.add("await"); }
+      else t.ui.knobs[r].classList.remove("await");
+    }
+
+    if(!locked("f" + i)){
+      t.fadVal = d.fad;
+      t.ui.fader.style.setProperty("--p", d.fad/127);
+      t.ui.fdb.textContent = db(Math.pow(d.fad/127, 1.8));
+    }
+    if(d.gf >= 0){ t.ui.fader.style.setProperty("--g", d.gf/127); t.ui.fader.classList.add("await"); }
+    else t.ui.fader.classList.remove("await");
+
+    t.ui.vu.style.transform = "scaleY(" + clamp(d.vu * 1.3, 0, 1).toFixed(3) + ")";
+    if(document.activeElement !== t.ui.barSel) t.ui.barSel.value = String(d.bars);
+    t.bars = d.bars;
+  }
+
+  $("#syncBtn").classList.toggle("on", !!s.sync);
+  $("#monBtn").classList.toggle("on", !!s.mon);
+  $("#autoBtn").classList.toggle("on", !!s.adv);
+  $("#autoRecBtn").classList.toggle("on", !!s.arec);
+  if(document.activeElement !== $("#thresh")) $("#thresh").value = s.thresh;
+  if(document.activeElement !== $("#comp"))   $("#comp").value = Math.round(s.comp);
+
+  $("#inVu").style.transform = "scaleX(" + clamp(s.inVu * 1.3, 0, 1).toFixed(3) + ")";
+  const v2 = $("#inVu2"); if(v2) v2.style.transform = "scaleX(" + clamp(s.inVu * 1.3, 0, 1).toFixed(3) + ")";
+  $("#masterVu").style.transform = "scaleX(" + clamp(s.masterVu, 0, 1).toFixed(3) + ")";
+
+  // MIDI
+  const chipEl = $("#midiChip");
+  chipEl.classList.toggle("ok", !!s.midi.ok);
+  chipEl.querySelector(".name").textContent = s.midi.ok ? s.midi.name : "MIDI : aucun contrôleur";
+  const mk = s.midi.ins.map(d=>d.id).join("|") + "§" + s.midi.outs.map(d=>d.id).join("|");
+  if(mk !== lastMidiKey){
+    lastMidiKey = mk;
+    const fill = (sel, list) => {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Auto (Launch Control XL)</option>';
+      list.forEach(d => { const o = document.createElement("option"); o.value = d.id; o.textContent = d.name; sel.appendChild(o); });
+      sel.value = cur;
+    };
+    fill($("#midiInSel"), s.midi.ins);
+    fill($("#midiOutSel"), s.midi.outs);
+  }
+
+  // panneau audio
+  $("#asioBtn").style.display = s.standalone ? "" : "none";
+  $("#audioNote").textContent = s.standalone
+    ? "Standalone : panneau natif — driver ASIO, chaque entrée/sortie de ta carte, buffer, fréquence."
+    : "VST3 : l'audio est routé par ton DAW. L'entrée du plugin est ce que tu envoies sur sa piste.";
+  $("#apInfo").textContent = "Fréquence moteur : " + Math.round(SR) + " Hz";
+};
+
+/* ---------- événements ---------- */
+window.__ev = function(o){
+  if(!o) return;
+  if(o.toast) toast(o.toast, !!o.warn);
+  if(typeof o.wave === "number"){
+    const t = T[o.wave];
+    if(t){ t.pk = (o.pk && o.pk.length) ? o.pk : null; drawWave(t); }
+  }
+};
+
+/* ---------- tête de lecture (interpolation locale 60 fps) ---------- */
+function rafLoop(ts){
+  const blink = Math.floor(ts / 260) % 2 === 0;
+  for(const t of T){
+    if(t.hasBuf && (t.state === "PLAY" || t.state === "STOP") && t.dur > 0){
+      const p = ((t.pos + (performance.now() - t.posTs)/1000/t.dur) % 1 + 1) % 1;
+      t.ui.ph.style.opacity = 1;
+      t.ui.ph.style.transform = "translateX(" + (p * t.ui.wave.clientWidth) + "px)";
+    } else if(t.state === "REC"){
+      t.ui.ph.style.opacity = blink ? 1 : 0.2;
+      t.ui.ph.style.transform = "translateX(4px)";
+    } else {
+      t.ui.ph.style.opacity = 0;
+    }
+  }
+  requestAnimationFrame(rafLoop);
+}
+
+/* ---------- barre du haut ---------- */
+function initTopbar(){
+  $("#syncBtn").addEventListener("click", () => bridge.emit({ fn:"sync", v: $("#syncBtn").classList.contains("on") ? 0 : 1 }));
+  $("#monBtn").addEventListener("click", () => bridge.emit({ fn:"mon",  v: $("#monBtn").classList.contains("on") ? 0 : 1 }));
+  $("#autoBtn").addEventListener("click", () => bridge.emit({ fn:"adv",  v: $("#autoBtn").classList.contains("on") ? 0 : 1 }));
+  $("#autoRecBtn").addEventListener("click", () => bridge.emit({ fn:"arec", v: $("#autoRecBtn").classList.contains("on") ? 0 : 1 }));
+  $("#thresh").addEventListener("change", () => bridge.emit({ fn:"thresh", v: clamp(+$("#thresh").value || 3, 1, 50) }));
+  $("#comp").addEventListener("change",   () => bridge.emit({ fn:"comp",   v: clamp(+$("#comp").value || 0, 0, 300) }));
+  $("#stopAll").addEventListener("click", () => bridge.emit({ fn:"stopAll" }));
+  $("#clearAll").addEventListener("dblclick", () => bridge.emit({ fn:"clearAll" }));
+
+  // master
+  const mk = $("#masterKnob");
+  let mv = 108;
+  const applyM = () => {
+    mk.style.setProperty("--p", mv/127);
+    bridge.emit({ fn:"master", g: Math.pow(mv/127, 1.5) * 1.1 });
+  };
+  bindDrag(mk, d => { mv = clamp(mv + d, 0, 127); applyM(); });
+  mk.addEventListener("dblclick", () => { mv = 108; applyM(); });
+  mk.style.setProperty("--p", mv/127);
+
+  // panneau audio
+  $("#audioBtn").addEventListener("click", () => $("#audioPanel").classList.remove("hidden"));
+  $("#audioClose").addEventListener("click", () => $("#audioPanel").classList.add("hidden"));
+  $("#audioPanel").addEventListener("click", e => { if(e.target === $("#audioPanel")) $("#audioPanel").classList.add("hidden"); });
+  $("#asioBtn").addEventListener("click", () => bridge.emit({ fn:"audio" }));
+  $("#midiInSel").addEventListener("change",  () => bridge.emit({ fn:"midiIn",  id:$("#midiInSel").value }));
+  $("#midiOutSel").addEventListener("change", () => bridge.emit({ fn:"midiOut", id:$("#midiOutSel").value }));
+
+  // clavier
+  window.addEventListener("keydown", e => {
+    if(e.code === "Escape"){ $("#audioPanel").classList.add("hidden"); return; }
+    if(/(INPUT|SELECT|TEXTAREA)/.test(e.target.tagName)) return;
+    if(e.code === "ArrowLeft" || e.code === "ArrowRight"){
+      e.preventDefault();
+      bridge.emit({ fn:"selStep", v: e.code === "ArrowLeft" ? -1 : 1 });
+      return;
+    }
+    if(e.code === "ArrowUp" || e.code === "ArrowDown"){
+      e.preventDefault();
+      bridge.emit({ fn:"stepBars", v: e.code === "ArrowUp" ? 1 : -1 });
+      return;
+    }
+    if(e.code === "Space"){ e.preventDefault(); bridge.emit({ fn:"stopAll" }); return; }
+    const m = /^Digit([1-8])$/.exec(e.code);
+    if(m){
+      e.preventDefault();
+      if(e.shiftKey) bridge.emit({ fn:"clear", i:+m[1] - 1 });
+      else           bridge.emit({ fn:"press", i:+m[1] - 1 });
+    }
+  });
+}
+
+/* ---------- démarrage ---------- */
+window.addEventListener("DOMContentLoaded", () => {
+  buildRowSelects();
+  buildStrips();
+  initTopbar();
+  requestAnimationFrame(rafLoop);
+
+  const boot = $("#boot");
+  if(bridge.ok){
+    boot.classList.add("hidden");
+    bridge.emit({ fn:"ready" });
+  } else {
+    // ouvert dans un simple navigateur : aperçu visuel seulement
+    const b = $("#bootBtn");
+    if(b){ b.textContent = "APERÇU (SANS AUDIO)"; b.addEventListener("click", () => boot.classList.add("hidden")); }
+    toast("Aperçu : ouvre le plugin (VST3/standalone) pour le son.", true);
+  }
+});
+</script>
+</body>
+</html>
