@@ -763,19 +763,23 @@ function initTopbar(){
 
 /* ---------- démarrage ---------- */
 window.addEventListener("DOMContentLoaded", () => {
-  buildRowSelects();
-  buildStrips();
-  initTopbar();
-  requestAnimationFrame(rafLoop);
-
-  const boot = $("#boot");
+  const boot = $("#boot"), bootBtn = $("#bootBtn");
+  // le bouton fonctionne TOUJOURS, même si l'init plantait plus bas
+  if(bootBtn) bootBtn.addEventListener("click", () => { boot.remove(); bridge.emit({ fn:"ready" }); });
+  try{
+    buildRowSelects();
+    buildStrips();
+    initTopbar();
+    requestAnimationFrame(rafLoop);
+  }catch(err){
+    toast("Erreur UI : " + err.message, true);
+  }
   if(bridge.ok){
-    boot.classList.add("hidden");
+    boot.remove();   // #boot{display:flex} bat .hidden en spécificité — on retire le nœud, comme le proto
     bridge.emit({ fn:"ready" });
-  } else {
+  } else if(bootBtn){
     // ouvert dans un simple navigateur : aperçu visuel seulement
-    const b = $("#bootBtn");
-    if(b){ b.textContent = "APERÇU (SANS AUDIO)"; b.addEventListener("click", () => boot.classList.add("hidden")); }
+    bootBtn.textContent = "APERÇU (SANS AUDIO)";
     toast("Aperçu : ouvre le plugin (VST3/standalone) pour le son.", true);
   }
 });
