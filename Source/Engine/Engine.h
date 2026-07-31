@@ -16,6 +16,7 @@ constexpr int    kMarginFr    = 1536;   // avance d'armement (frames)
 constexpr int    kPreRollFr   = 384;    // pré-roll auto-rec (~8 ms)
 constexpr int    kRingLen     = 8192;   // ring de pré-roll
 constexpr int    kWavePoints  = 256;    // paires min/max envoyées à l'UI
+constexpr int    kXFadeFr     = 256;    // fondu enchaîné au point de bouclage (~5 ms)
 
 enum class St { Empty, Wait, Pending, Rec, Play, Stop };
 
@@ -157,6 +158,11 @@ public:
     juce::ValueTree toState() const;
     void fromState (const juce::ValueTree&);
 
+    // session complète : réglages + boucles audio (format .essaim)
+    bool saveSession (juce::OutputStream& os);
+    bool loadSession (juce::InputStream& is);
+    void pushToast (const juce::String& m, bool warn = false);
+
 private:
     // ---- helpers (lock tenu) ----
     juce::int64 curF() const { return gf.load(); }
@@ -169,7 +175,7 @@ private:
     void armWatch (Track& t);
     void cancelWatch (Track& t);
     void finishRec (int idx);            // onDone : boucle prête (thread message via uiTick)
-    void pushToast (const juce::String& m, bool warn = false);
+    std::vector<float> waveOfLocked (Track& t);   // décimation min/max (lock tenu)
     void allocCapture (Track& t, juce::int64 frames);
 
     // ---- audio thread ----

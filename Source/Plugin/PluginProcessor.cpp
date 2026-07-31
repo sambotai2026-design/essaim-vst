@@ -32,14 +32,17 @@ juce::AudioProcessorEditor* EssaimProcessor::createEditor() { return new EssaimE
 
 void EssaimProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = engine.toState().createXml())
-        copyXmlToBinary (*xml, dest);
+    // le projet du DAW embarque la session complète : réglages + boucles audio
+    juce::MemoryOutputStream mos (dest, false);
+    engine.saveSession (mos);
 }
 
 void EssaimProcessor::setStateInformation (const void* data, int size)
 {
-    if (auto xml = getXmlFromBinary (data, size))
-        engine.fromState (juce::ValueTree::fromXml (*xml));
+    juce::MemoryInputStream mis (data, (size_t) size, false);
+    if (! engine.loadSession (mis))
+        if (auto xml = getXmlFromBinary (data, size))          // anciens projets (réglages seuls)
+            engine.fromState (juce::ValueTree::fromXml (*xml));
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new EssaimProcessor(); }

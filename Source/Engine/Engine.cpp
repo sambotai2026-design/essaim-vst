@@ -114,7 +114,7 @@ double Engine::grooveDelayTime() const
 // ---------- allocation capture ----------
 void Engine::allocCapture (Track& t, juce::int64 frames)
 {
-    const auto want = juce::jmin ((juce::int64) (kMaxLoopSec * sr) + kRingLen, frames);
+    const auto want = juce::jmin ((juce::int64) (kMaxLoopSec * sr) + kRingLen, frames + kXFadeFr);
     if (t.buf.getNumSamples() < (int) want)
         t.buf.setSize (2, (int) want, false, false, true);
     t.buf.clear();
@@ -386,29 +386,36 @@ void Engine::finishRec (int idx)
         t.st = St::Play;
         if (autoAdv) sel = (idx + 1) % kNumTracks;
 
-        // forme d'onde décimée (min/max ×kWavePoints)
-        wave.resize ((size_t) kWavePoints * 2);
-        const auto* Rp = t.buf.getReadPointer (1);
-        const auto step = juce::jmax ((juce::int64) 1, t.bufLen / kWavePoints);
-        for (int x = 0; x < kWavePoints; ++x)
-        {
-            float mn = 1.f, mx = -1.f;
-            const auto s0 = (juce::int64) x * step, s1 = juce::jmin (t.bufLen, s0 + step);
-            for (juce::int64 s = s0; s < s1; s += 4)
-            {
-                const float v = (L[(int) s] + Rp[(int) s]) * 0.5f;
-                mn = juce::jmin (mn, v); mx = juce::jmax (mx, v);
-            }
-            if (mx < mn) { mn = 0; mx = 0; }
-            wave[(size_t) x * 2]     = mn;
-            wave[(size_t) x * 2 + 1] = mx;
-        }
+        wave = waveOfLocked (t);
     }
 
     if (toastMsg.isNotEmpty()) pushToast (toastMsg, warn);
     if (posedGrid)             pushToast (gridMsg);
     UiEvent e; e.type = UiEvent::Wave; e.track = idx; e.wave = std::move (wave);
     juce::ScopedLock el (evLock); events.push_back (std::move (e));
+}
+
+std::vector<float> Engine::waveOfLocked (Track& t)
+{
+    std::vector<float> wave ((size_t) kWavePoints * 2, 0.f);
+    if (! t.hasBuf || t.bufLen <= 0) return wave;
+    const auto* L  = t.buf.getReadPointer (0);
+    const auto* Rp = t.buf.getReadPointer (1);
+    const auto step = juce::jmax ((juce::int64) 1, t.bufLen / kWavePoints);
+    for (int x = 0; x < kWavePoints; ++x)
+    {
+        float mn = 1.f, mx = -1.f;
+        const auto s0 = (juce::int64) x * step, s1 = juce::jmin (t.bufLen, s0 + step);
+        for (juce::int64 sm = s0; sm < s1; sm += 4)
+        {
+            const float v = (L[(int) sm] + Rp[(int) sm]) * 0.5f;
+            mn = juce::jmin (mn, v); mx = juce::jmax (mx, v);
+        }
+        if (mx < mn) { mn = 0; mx = 0; }
+        wave[(size_t) x * 2]     = mn;
+        wave[(size_t) x * 2 + 1] = mx;
+    }
+    return wave;
 }
 
 void Engine::pushToast (const juce::String& m, bool warn)
@@ -470,6 +477,7 @@ juce::ValueTree Engine::toState() const
     v.setProperty ("sync", sync, nullptr);   v.setProperty ("adv", autoAdv, nullptr);
     v.setProperty ("arec", autoRec, nullptr); v.setProperty ("thresh", thresh, nullptr);
     v.setProperty ("comp", compMs, nullptr);  v.setProperty ("sel", sel, nullptr);
+    v.setProperty ("mon", monitor, nullptr);  v.setProperty ("mgain", (double) masterGain.load(), nullptr);
     for (int i = 0; i < kNumTracks; ++i)
     {
         juce::ValueTree tv ("T"); auto& t = tr[(size_t) i];
@@ -492,6 +500,8 @@ void Engine::fromState (const juce::ValueTree& v)
     thresh = (double) v.getProperty ("thresh", 0.03);
     compMs = (double) v.getProperty ("comp", 0.0);
     sel = (int) v.getProperty ("sel", 0);
+    monitor = (bool) v.getProperty ("mon", false);
+    masterGain.store ((float) (double) v.getProperty ("mgain", 0.8626));
     for (int i = 0; i < juce::jmin (kNumTracks, v.getNumChildren()); ++i)
     {
         auto tv = v.getChild (i); auto& t = tr[(size_t) i];
@@ -549,10 +559,28 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
         if ((t.st == St::Pending || t.st == St::Rec) && t.jobId > 0)
         {
             const auto js = t.capBase;
-            const auto je = t.stopF != 0 ? t.stopF + compF() : (juce::int64) 1 << 60;
+            const auto je = t.stopF != 0 ? t.stopF + compF() + kXFadeFr : (juce::int64) 1 << 60;
+
+            auto blendHead = [this] (Track& tt)
+            {
+                // fondu enchaîné tête/queue : la fin capturée en trop (kXFadeFr frames)
+                // est fondue dans le début — plus de clic au point de bouclage.
+                const auto L = tt.stopF + compF() - tt.capBase;
+                if (L <= kXFadeFr) return;
+                auto* bl = tt.buf.getWritePointer (0);
+                auto* br = tt.buf.getWritePointer (1);
+                for (int j = 0; j < kXFadeFr && L + j < tt.capCount; ++j)
+                {
+                    const float w = std::sin (((float) (j + 1) / (kXFadeFr + 1)) * juce::MathConstants<float>::halfPi);
+                    const float u = std::cos (((float) (j + 1) / (kXFadeFr + 1)) * juce::MathConstants<float>::halfPi);
+                    bl[j] = bl[j] * w + bl[(int) L + j] * u;
+                    br[j] = br[j] * w + br[(int) L + j] * u;
+                }
+            };
             if (je <= b0)
             {
                 // terminé avant ce bloc
+                blendHead (t);
                 t.jobId = -1;
                 doneFlag[(size_t) (&t - tr.data())].store (1);
                 continue;
@@ -568,6 +596,7 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
             }
             if (je <= b1)
             {
+                blendHead (t);
                 t.jobId = -1;
                 doneFlag[(size_t) (&t - tr.data())].store (1);
             }
@@ -600,7 +629,14 @@ void Engine::renderTracks (const float* inL, const float* inR, juce::AudioBuffer
 
         const bool playing = (t.st == St::Play || t.st == St::Stop) && t.hasBuf && t.bufLen > 0;
         const bool tapOn   = t.inTap.getCurrentValue() > 0.0005f || t.inTap.getTargetValue() > 0.0005f;
-        if (! playing && ! tapOn)
+        // fin d'enregistrement : la lecture doit démarrer PILE à stopF, dans ce bloc,
+        // sans attendre que le thread message passe la piste en PLAY (sinon : trou + clic)
+        const bool recTail = (t.st == St::Rec && t.stopF != 0 && t.buf.getNumSamples() > 0
+                              && now0 + n > t.stopF);
+        const juce::int64 tailLen = recTail
+            ? juce::jmax ((juce::int64) 1, juce::jmin ((juce::int64) t.buf.getNumSamples(), t.stopF - t.startF))
+            : 0;
+        if (! playing && ! tapOn && ! recTail)
         {
             // fait quand même avancer les smoothers pour rester cohérent
             t.trimG.skip (n); t.volG.skip (n); t.muteG.skip (n);
@@ -627,6 +663,19 @@ void Engine::renderTracks (const float* inL, const float* inR, juce::AudioBuffer
             {
                 xl = bL[(int) rp]; xr = bR[(int) rp];
                 if (++rp >= t.bufLen) rp = 0;
+            }
+            else if (recTail)
+            {
+                const auto gfq = now0 + q;
+                if (gfq >= t.stopF)
+                {
+                    const auto idx = (gfq - t.stopF) % tailLen;
+                    if (idx < t.capCount)
+                    {
+                        xl = t.buf.getSample (0, (int) idx);
+                        xr = t.buf.getSample (1, (int) idx);
+                    }
+                }
             }
             const float tap = t.inTap.getNextValue();
             xl += inL[q] * tap; xr += inR[q] * tap;
@@ -744,6 +793,145 @@ void Engine::process (juce::AudioBuffer<float>& io)
     }
 
     gf.store (b0 + n);
+}
+
+} // namespace essaim
+
+namespace essaim {
+
+// ---------- session complète (.essaim) : réglages + boucles ----------
+// Format v1 : "ESSAIMS1" | int32 taille XML | XML UTF-8 | par piste avec boucle :
+//   int64 frames | float32 L[frames] | float32 R[frames]
+static const char* kSessionMagic = "ESSAIMS1";
+
+bool Engine::saveSession (juce::OutputStream& os)
+{
+    juce::ValueTree v;
+    std::array<juce::AudioBuffer<float>, kNumTracks> bufs;
+    std::array<juce::int64, kNumTracks> lens {};
+    {
+        juce::ScopedLock l (lock);
+        v = toState();
+        v.setProperty ("gridOn",  grid.on,  nullptr);
+        v.setProperty ("gridLen", grid.lenS, nullptr);
+        v.setProperty ("gridBar", grid.barS, nullptr);
+        v.setProperty ("srSaved", sr, nullptr);
+        for (int i = 0; i < kNumTracks; ++i)
+        {
+            auto& t = tr[(size_t) i];
+            auto tv = v.getChild (i);
+            tv.setProperty ("hasBuf", t.hasBuf, nullptr);
+            tv.setProperty ("frames", (juce::int64) (t.hasBuf ? t.bufLen : 0), nullptr);
+            tv.setProperty ("dur", t.durS, nullptr);
+            if (t.hasBuf && t.bufLen > 0)
+            {
+                lens[(size_t) i] = t.bufLen;
+                bufs[(size_t) i].setSize (2, (int) t.bufLen);
+                bufs[(size_t) i].copyFrom (0, 0, t.buf, 0, 0, (int) t.bufLen);
+                bufs[(size_t) i].copyFrom (1, 0, t.buf, 1, 0, (int) t.bufLen);
+            }
+        }
+    }
+
+    const auto xml = v.toXmlString();
+    os.write (kSessionMagic, 8);
+    const auto utf8 = xml.toRawUTF8();
+    const auto xmlLen = (juce::int32) strlen (utf8);
+    os.writeInt (xmlLen);
+    os.write (utf8, (size_t) xmlLen);
+    for (int i = 0; i < kNumTracks; ++i)
+    {
+        if (lens[(size_t) i] <= 0) continue;
+        os.writeInt64 (lens[(size_t) i]);
+        os.write (bufs[(size_t) i].getReadPointer (0), (size_t) lens[(size_t) i] * sizeof (float));
+        os.write (bufs[(size_t) i].getReadPointer (1), (size_t) lens[(size_t) i] * sizeof (float));
+    }
+    os.flush();
+    return true;
+}
+
+bool Engine::loadSession (juce::InputStream& is)
+{
+    char magic[9] {};
+    if (is.read (magic, 8) != 8 || strcmp (magic, kSessionMagic) != 0) return false;
+    const auto xmlLen = is.readInt();
+    if (xmlLen <= 0 || xmlLen > 4 * 1024 * 1024) return false;
+    juce::MemoryBlock mb ((size_t) xmlLen + 1, true);
+    if (is.read (mb.getData(), xmlLen) != xmlLen) return false;
+    const auto v = juce::ValueTree::fromXml (juce::String::fromUTF8 ((const char*) mb.getData(), xmlLen));
+    if (! v.hasType ("ESSAIM")) return false;
+
+    // lecture des boucles HORS lock (le disque ne doit pas bloquer l'audio)
+    std::array<juce::AudioBuffer<float>, kNumTracks> bufs;
+    std::array<juce::int64, kNumTracks> lens {};
+    for (int i = 0; i < juce::jmin (kNumTracks, v.getNumChildren()); ++i)
+    {
+        const auto tv = v.getChild (i);
+        if (! (bool) tv.getProperty ("hasBuf", false)) continue;
+        const auto frames = (juce::int64) tv.getProperty ("frames", 0);
+        if (frames <= 0 || frames > (juce::int64) (kMaxLoopSec * 192000.0)) return false;
+        if (is.readInt64() != frames) return false;
+        bufs[(size_t) i].setSize (2, (int) frames);
+        if (is.read (bufs[(size_t) i].getWritePointer (0), (int) (frames * (juce::int64) sizeof (float))) != (int) (frames * (juce::int64) sizeof (float))) return false;
+        if (is.read (bufs[(size_t) i].getWritePointer (1), (int) (frames * (juce::int64) sizeof (float))) != (int) (frames * (juce::int64) sizeof (float))) return false;
+        lens[(size_t) i] = frames;
+    }
+
+    const double savedSr = (double) v.getProperty ("srSaved", sr);
+
+    {
+        juce::ScopedLock l (lock);
+        for (auto& t : tr)
+        {
+            if (t.st == St::Wait) cancelWatch (t);
+            if (t.st == St::Rec || t.st == St::Pending) cancelRec (t);
+        }
+        fromState (v);
+        const auto A0 = curF() + kMarginFr;    // toutes les boucles re-phasées, têtes alignées
+        const double ratio = savedSr > 0 ? sr / savedSr : 1.0;   // durées gardées si sr diffère
+        for (int i = 0; i < kNumTracks; ++i)
+        {
+            auto& t = tr[(size_t) i];
+            if (lens[(size_t) i] > 0)
+            {
+                t.buf = std::move (bufs[(size_t) i]);
+                t.bufLen = lens[(size_t) i];
+                t.hasBuf = true;
+                t.durS = (double) t.bufLen / savedSr;
+                t.anchorF = A0;
+                t.st = St::Stop;                          // muettes, en phase — PLAY pour lancer
+                t.muteG.setCurrentAndTargetValue (0.f);
+                t.pos.store (0.f);
+            }
+            else
+            {
+                t.hasBuf = false; t.bufLen = 0; t.durS = 0; t.st = St::Empty;
+                t.muteG.setCurrentAndTargetValue (1.f);
+                t.pos.store (0.f);
+            }
+            t.closing = false; t.jobId = -1; t.capCount = 0;
+        }
+        const bool gOn = (bool) v.getProperty ("gridOn", false);
+        grid.on   = gOn;
+        grid.lenS = (double) v.getProperty ("gridLen", 0.0);
+        grid.barS = (double) v.getProperty ("gridBar", 0.0);
+        grid.t0S  = (double) A0 / sr;
+        juce::ignoreUnused (ratio);
+        dlyTime.setTargetValue ((float) grooveDelayTime());
+    }
+
+    // formes d'onde + toast
+    for (int i = 0; i < kNumTracks; ++i)
+    {
+        UiEvent e; e.type = UiEvent::Wave; e.track = i;
+        {
+            juce::ScopedLock l (lock);
+            if (tr[(size_t) i].hasBuf) e.wave = waveOfLocked (tr[(size_t) i]);
+        }
+        juce::ScopedLock el (evLock); events.push_back (std::move (e));
+    }
+    pushToast (juce::String::fromUTF8 ("Session chargée — pistes en STOP, en phase. PLAY pour lancer."));
+    return true;
 }
 
 } // namespace essaim

@@ -23,10 +23,18 @@ taille de buffer, fréquence. En **VST3**, l'audio est routé par le DAW.
 
 ## Installer
 
-- **VST3** : copie `L'ESSAIM.vst3` dans `C:\Program Files\Common Files\VST3`
+- **VST3** : copie `LESSAIM.vst3` dans `C:\Program Files\Common Files\VST3`
   (macOS : `~/Library/Audio/Plug-Ins/VST3`). Rescanne dans ton DAW.
-- **Standalone** : lance `L'ESSAIM.exe` où tu veux. Bouton **AUDIO** → **OUVRIR LE
+- **Standalone** : lance `LESSAIM.exe` où tu veux. Bouton **AUDIO** → **OUVRIR LE
   PANNEAU AUDIO (ASIO)** → choisis le driver ASIO du FLX10, les canaux, le buffer.
+
+## Sessions
+
+Panneau **AUDIO** → section **SESSION** : `SAUVER…` / `CHARGER…` produit un fichier
+`.essaim` qui embarque **tout** — boucles audio, effets, assignations, mesures,
+réglages, grille. Au chargement, les pistes reviennent en **STOP, en phase** :
+appuie PLAY pour les lancer ensemble. En VST3, le projet du DAW embarque
+automatiquement la session complète (sauvegarder le set Ableton suffit).
 
 ## Launch Control XL
 
@@ -47,3 +55,5 @@ flèches ◀▶ = piste d'entrée, ▲▼ = mesures de la piste sélectionnée.
   (licence Steinberg : le SDK n'est pas redistribué dans ce repo). Si le
   téléchargement échoue, le build sort quand même — sans ASIO (WASAPI/DirectSound).
 - `pluginval` (niveau 5) tourne sur chaque build.
+- Fin d'enregistrement échantillon-précise (le relais REC→PLAY se fait dans le
+  thread audio) + fondu enchaîné ~5 ms au point de bouclage : pas de clic.

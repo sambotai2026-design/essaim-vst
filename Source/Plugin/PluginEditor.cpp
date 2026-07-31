@@ -83,8 +83,49 @@ void EssaimEditor::handleUiEvent (const var& v)
     else if (fn == "comp")     e.setCompMs ((double) val);
     else if (fn == "master")   e.setMasterGain01 ((double) v.getProperty ("g", 0.85));
     else if (fn == "audio")    openAudioSettings();
+    else if (fn == "saveSession")
+    {
+        chooser = std::make_unique<FileChooser> ("Sauver la session",
+                    File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("session.essaim"),
+                    "*.essaim");
+        chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::warnAboutOverwriting,
+            [this] (const FileChooser& fc)
+            {
+                auto f = fc.getResult();
+                if (f == File()) return;
+                f = f.withFileExtension ("essaim");
+                f.deleteFile();
+                juce::FileOutputStream fos (f);
+                if (fos.openedOk() && proc.engine.saveSession (fos))
+                    jsToast (juce::String::fromUTF8 ("Session sauvée : ") + f.getFileName());
+                else
+                    jsToast (juce::String::fromUTF8 ("Échec de la sauvegarde."), true);
+            });
+    }
+    else if (fn == "loadSession")
+    {
+        chooser = std::make_unique<FileChooser> ("Charger une session", File(), "*.essaim");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+            [this] (const FileChooser& fc)
+            {
+                const auto f = fc.getResult();
+                if (f == File()) return;
+                juce::FileInputStream fis (f);
+                if (! (fis.openedOk() && proc.engine.loadSession (fis)))
+                    jsToast (juce::String::fromUTF8 ("Fichier de session invalide."), true);
+            });
+    }
     else if (fn == "midiIn")   proc.lcxl.setInputId  (v.getProperty ("id", "").toString());
     else if (fn == "midiOut")  proc.lcxl.setOutputId (v.getProperty ("id", "").toString());
+}
+
+void EssaimEditor::jsToast (const juce::String& msg, bool warn)
+{
+    if (web == nullptr) return;
+    auto* o = new DynamicObject();
+    o->setProperty ("toast", msg);
+    if (warn) o->setProperty ("warn", true);
+    web->evaluateJavascript ("window.__ev && window.__ev(" + JSON::toString (var (o), true) + ");");
 }
 
 void EssaimEditor::openAudioSettings()

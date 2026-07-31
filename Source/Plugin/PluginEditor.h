@@ -17,8 +17,11 @@ private:
     juce::String buildStateJson();
     void openAudioSettings();
 
+    void jsToast (const juce::String& msg, bool warn = false);
+
     EssaimProcessor& proc;
     std::unique_ptr<juce::WebBrowserComponent> web;
+    std::unique_ptr<juce::FileChooser> chooser;
     bool uiReady = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EssaimEditor)

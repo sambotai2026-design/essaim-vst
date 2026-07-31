@@ -310,10 +310,16 @@ kbd{ font-family:"JetBrains Mono",monospace; font-size:10px; background:var(--ce
     </div>
 
     <div class="apgrp">
+      <div class="aplbl">SESSION</div>
+      <div class="aprow"><button class="tgl" id="sessSave" title="Tout sauver : boucles audio, effets, assignations, mesures, réglages">SAUVER…</button><button class="tgl" id="sessLoad" title="Recharger une session .essaim">CHARGER…</button></div>
+      <div class="apnote">Tout est embarqué dans un fichier .essaim : boucles, effets, assignations, mesures, réglages. Au chargement, les pistes reviennent en STOP, en phase — PLAY pour les lancer.</div>
+    </div>
+
+    <div class="apgrp">
       <div class="aplbl">MIDI — LAUNCH CONTROL XL</div>
       <div class="aprow"><span class="aplbl2">ENTRÉE</span><select id="midiInSel" class="apsel" title="Contrôleur MIDI (détection auto par défaut)"><option value="">Auto (Launch Control XL)</option></select></div>
       <div class="aprow"><span class="aplbl2">SORTIE</span><select id="midiOutSel" class="apsel" title="Sortie MIDI pour les LED"><option value="">Auto (Launch Control XL)</option></select></div>
-      <div class="apnote">Détection automatique du Launch Control XL ; choisis manuellement si besoin. La sortie sert aux LED. Ne l'active pas en parallèle comme surface de contrôle dans ton DAW.</div>
+      <div class="apnote">Réservé au Launch Control XL — tout autre contrôleur (DDJ compris) est ignoré ici. La sortie sert aux LED. Ne l'active pas en parallèle dans ton DAW. L'audio ne se règle PAS ici : bouton ASIO ci-dessus (standalone) ou routage du DAW (VST3).</div>
     </div>
 
     <div class="apinfo" id="apInfo"></div>
@@ -675,7 +681,7 @@ window.__push = function(s){
   $("#asioBtn").style.display = s.standalone ? "" : "none";
   $("#audioNote").textContent = s.standalone
     ? "Standalone : panneau natif — driver ASIO, chaque entrée/sortie de ta carte, buffer, fréquence."
-    : "VST3 : l'audio est routé par ton DAW. L'entrée du plugin est ce que tu envoies sur sa piste.";
+    : "VST3 : l'audio est routé par le DAW — pas de panneau ASIO ici, c'est normal. Ableton : Préférences → Audio → Config. d'entrée → active la paire du CH3 (5/6). Sur la piste du plugin : Entrée audio ext. 5/6 + Monitor IN. Et ferme le standalone avant d'ouvrir Ableton : l'ASIO du FLX10 n'accepte qu'un logiciel à la fois.";
   $("#apInfo").textContent = "Fréquence moteur : " + Math.round(SR) + " Hz";
 };
 
@@ -734,6 +740,9 @@ function initTopbar(){
   $("#audioClose").addEventListener("click", () => $("#audioPanel").classList.add("hidden"));
   $("#audioPanel").addEventListener("click", e => { if(e.target === $("#audioPanel")) $("#audioPanel").classList.add("hidden"); });
   $("#asioBtn").addEventListener("click", () => bridge.emit({ fn:"audio" }));
+  const sS = $("#sessSave"), sL = $("#sessLoad");
+  if(sS) sS.addEventListener("click", () => bridge.emit({ fn:"saveSession" }));
+  if(sL) sL.addEventListener("click", () => bridge.emit({ fn:"loadSession" }));
   $("#midiInSel").addEventListener("change",  () => bridge.emit({ fn:"midiIn",  id:$("#midiInSel").value }));
   $("#midiOutSel").addEventListener("change", () => bridge.emit({ fn:"midiOut", id:$("#midiOutSel").value }));
 
