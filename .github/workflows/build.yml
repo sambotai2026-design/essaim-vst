@@ -1,0 +1,76 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SDK ASIO (Steinberg)
+        id: asio
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          curl.exe -L -o asiosdk.zip "https://www.steinberg.net/asiosdk"
+          Expand-Archive asiosdk.zip -DestinationPath asiosdk_x
+          $dir = Get-ChildItem asiosdk_x -Directory | Select-Object -First 1
+          echo "ASIOSDK_DIR=$($dir.FullName)" >> $env:GITHUB_ENV
+          echo "ok=1" >> $env:GITHUB_OUTPUT
+
+      - name: Configure (ASIO si dispo)
+        shell: pwsh
+        run: |
+          if ($env:ASIOSDK_DIR) {
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DESSAIM_ASIO=ON
+          } else {
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+          }
+
+      - name: Build
+        run: cmake --build build --config Release --target Essaim_VST3 Essaim_Standalone
+
+      - name: pluginval
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          curl.exe -L -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip"
+          Expand-Archive pluginval.zip -DestinationPath pv
+          $vst3 = Get-ChildItem -Recurse build -Filter "L'ESSAIM.vst3" -Directory | Select-Object -First 1
+          & pv\pluginval.exe --strictness-level 5 --validate "$($vst3.FullName)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESSAIM-windows
+          path: |
+            build/**/Release/VST3/**
+            build/**/Release/Standalone/**
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target Essaim_VST3 Essaim_Standalone
+
+      - name: pluginval
+        continue-on-error: true
+        run: |
+          curl -L -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip"
+          unzip -q pluginval.zip
+          vst3=$(find build -type d -name "L'ESSAIM.vst3" | head -1)
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "$vst3" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESSAIM-macos
+          path: |
+            build/**/VST3/**
+            build/**/Standalone/**
