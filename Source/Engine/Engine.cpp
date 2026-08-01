@@ -140,9 +140,9 @@ void Engine::armRec (Track& t)
         {
             const auto barF = (juce::int64) juce::roundToInt (grid.barS * sr);
             t.stopF = t.startF + (juce::int64) t.bars * barF;   // fin automatique, calée
-            allocCapture (t, t.stopF - t.startF + 64);
         }
-        else { t.stopF = 0; allocCapture (t, (juce::int64) (kMaxLoopSec * sr)); }
+        else t.stopF = 0;
+        allocCapture (t, (juce::int64) (kMaxLoopSec * sr));   // large : M modifiable en cours
         t.st = St::Pending;
     }
     else
@@ -271,7 +271,24 @@ void Engine::resetFxRow (int i, int row)
 
 void Engine::setAssign (int i, int row, Fx f) { juce::ScopedLock l (lock); tr[(size_t) i].assign[(size_t) row] = f; }
 void Engine::setAssignRow (int row, Fx f)     { juce::ScopedLock l (lock); for (auto& t : tr) t.assign[(size_t) row] = f; }
-void Engine::setBars (int i, int b)           { juce::ScopedLock l (lock); tr[(size_t) i].bars = b; }
+void Engine::setBars (int i, int b)
+{
+    juce::ScopedLock l (lock);
+    auto& t = tr[(size_t) i];
+    t.bars = b;
+    // prise calée en cours : recaler la fin automatique si possible
+    if ((t.st == St::Pending || t.st == St::Rec) && ! t.closing
+        && sync && grid.on && t.jobId > 0)
+    {
+        const auto barF = juce::jmax ((juce::int64) 1, (juce::int64) juce::roundToInt (grid.barS * sr));
+        if (b > 0)
+        {
+            const auto ns = t.startF + (juce::int64) b * barF;
+            if (ns > curF() + kMarginFr) t.stopF = ns;      // encore dans le futur : appliqué
+        }
+        else t.stopF = 0;                                    // MAN : fin manuelle
+    }
+}
 
 void Engine::stepBars (int i, int dir)
 {
@@ -281,6 +298,17 @@ void Engine::stepBars (int i, int dir)
     int idx = 0; for (int k = 0; k < 7; ++k) if (steps[k] == t.bars) idx = k;
     idx = juce::jlimit (0, 6, idx + dir);
     t.bars = steps[idx];
+    if ((t.st == St::Pending || t.st == St::Rec) && ! t.closing
+        && sync && grid.on && t.jobId > 0)
+    {
+        const auto barF = juce::jmax ((juce::int64) 1, (juce::int64) juce::roundToInt (grid.barS * sr));
+        if (t.bars > 0)
+        {
+            const auto ns = t.startF + (juce::int64) t.bars * barF;
+            if (ns > curF() + kMarginFr) t.stopF = ns;
+        }
+        else t.stopF = 0;
+    }
     pushToast ("Piste " + juce::String (i + 1) + " : "
                + (t.bars > 0 ? juce::String (t.bars) + " mesure" + (t.bars > 1 ? "s" : "")
                              : juce::String ("fin manuelle")) + ".");
@@ -524,7 +552,11 @@ void Engine::finishRec (int idx)
 
         if (! grid.on)
         {
-            const double bl = t.bars > 0 ? t.durS / t.bars : t.durS;
+            const int nb = t.bars > 0 ? t.bars : 1;
+            const auto barFexact = juce::jmax ((juce::int64) 1, (t.bufLen + nb / 2) / nb);
+            t.bufLen = juce::jmin ((juce::int64) t.buf.getNumSamples(), barFexact * nb);
+            t.durS   = (double) t.bufLen / sr;
+            const double bl = (double) barFexact / sr;
             grid = { true, t.durS, (double) t.anchorF / sr, bl };
             posedGrid = true;
             gridMsg = juce::String::fromUTF8 ("Grille posée : ") + juce::String (t.durS, 2) + " s"
@@ -730,6 +762,9 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
         // capture active (Pending programmé ou Rec)
         if ((t.st == St::Pending || t.st == St::Rec) && t.jobId > 0)
         {
+            if (t.st == St::Pending && b1 > t.startF)
+                t.st = St::Rec;   // l'enregistrement commence dans ce bloc
+
             auto blendHead = [this] (Track& tt)
             {
                 // fondu enchaîné tête/queue : la fin capturée en trop (kXFadeFr frames)
