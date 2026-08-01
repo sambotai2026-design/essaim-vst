@@ -54,6 +54,7 @@ struct Track
     bool    closing   = false;
     bool    watchMain = false;      // écoute déclencheur (grille posée)
     bool    gateOpen  = false;      // ÉCOUTE : un silence de ~120 ms est requis avant d'accepter un son
+    bool    bleedWarned = false;    // alerte repisse déjà émise pour cet armement
     juce::int64 startF = 0, stopF = 0;   // frames "musicales"
     juce::int64 anchorF = 0;             // ancre de phase (playT0)
     int     jobId     = -1;

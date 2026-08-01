@@ -174,6 +174,7 @@ void Engine::armWatch (Track& t)
 {
     t.capCount = 0; t.closing = false;
     t.gateOpen = false;    // exige un vrai silence avant d'écouter (anti queue de phrase)
+    t.bleedWarned = false;
     t.jobId = ++jobSeq;
     t.watchMain = sync && grid.on;      // grille posée → le son déclenche un armement quantisé
     if (! t.watchMain)
@@ -329,7 +330,21 @@ void Engine::uiTick()
             {
                 if (! t.gateOpen && curF() - lastAboveF.load() > (juce::int64) (0.12 * sr))
                     t.gateOpen = true;
-                if (t.gateOpen && inPeak.load() >= (float) thresh) armRec (t);
+                if (t.gateOpen && inPeak.load() >= (float) thresh)
+                {
+                    // anti-repisse : si les boucles jouent, l'entrée doit DOMINER la sortie
+                    // (voix près du micro : oui ; boucle qui revient par le câblage/l'air : non).
+                    // Sans monitoring uniquement — avec MON la voix est déjà dans le master.
+                    const float mv = masterVuA.load();
+                    if (monitor || inPeak.load() >= mv * 0.5f)
+                        armRec (t);
+                    else if (! t.bleedWarned)
+                    {
+                        t.bleedWarned = true;
+                        pushToast (juce::String::fromUTF8 ("ÉCOUTE bloquée : l'entrée reçoit la sortie du looper (repisse). "
+                                   "Vérifie la paire d'entrée (CH3, pas MIX/REC) et le câblage, ou chante plus près / monte le seuil."), true);
+                    }
+                }
             }
         }
         // garde-fou longueur max
@@ -538,7 +553,9 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                 else continue;   // encore du son (queue de la prise précédente) : on attend le silence
             }
             int hit = -1;
-            const float th = (float) thresh;
+            const float mv = masterVuA.load();
+            const float th = monitor ? (float) thresh
+                                     : juce::jmax ((float) thresh, mv * 0.5f);   // anti-repisse
             for (int q = 0; q < n; ++q)
                 if (std::abs (inL[q]) >= th || std::abs (inR[q]) >= th) { hit = q; break; }
             if (hit >= 0)
