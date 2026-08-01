@@ -85,6 +85,7 @@ void EssaimEditor::handleUiEvent (const var& v)
     else if (fn == "audio")    openAudioSettings();
     else if (fn == "saveSession")
     {
+        if (auto* top = getTopLevelComponent()) top->toFront (true);
         chooser = std::make_unique<FileChooser> ("Sauver la session",
                     File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("session.essaim"),
                     "*.essaim");
@@ -104,6 +105,7 @@ void EssaimEditor::handleUiEvent (const var& v)
     }
     else if (fn == "loadSession")
     {
+        if (auto* top = getTopLevelComponent()) top->toFront (true);
         chooser = std::make_unique<FileChooser> ("Charger une session", File(), "*.essaim");
         chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
             [this] (const FileChooser& fc)

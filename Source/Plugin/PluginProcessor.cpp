@@ -32,7 +32,16 @@ juce::AudioProcessorEditor* EssaimProcessor::createEditor() { return new EssaimE
 
 void EssaimProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    // le projet du DAW embarque la session complète : réglages + boucles audio
+    if (wrapperType == wrapperType_Standalone)
+    {
+        // le wrapper standalone persiste cet état en base64 dans son fichier de
+        // réglages à CHAQUE fermeture et le relit au lancement : on n'y met que
+        // les réglages (léger). Les boucles passent par les fichiers .essaim.
+        if (auto xml = engine.toState().createXml())
+            copyXmlToBinary (*xml, dest);
+        return;
+    }
+    // VST3 : le projet du DAW embarque la session complète (réglages + boucles)
     juce::MemoryOutputStream mos (dest, false);
     engine.saveSession (mos);
 }

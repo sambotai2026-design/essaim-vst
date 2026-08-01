@@ -116,8 +116,8 @@ void Engine::allocCapture (Track& t, juce::int64 frames)
 {
     const auto want = juce::jmin ((juce::int64) (kMaxLoopSec * sr) + kRingLen, frames + kXFadeFr);
     if (t.buf.getNumSamples() < (int) want)
-        t.buf.setSize (2, (int) want, false, false, true);
-    t.buf.clear();
+        t.buf.setSize (2, (int) want, false, false, true);   // pas de clear : on ne lit
+    // jamais au-delà de ce qui a été écrit (lecture ⊆ [0,bufLen), fondu ⊆ [L,capCount))
 }
 
 // ---------- actions (lock tenu par l'appelant public) ----------
