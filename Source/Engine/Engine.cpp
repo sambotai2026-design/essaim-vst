@@ -132,6 +132,7 @@ void Engine::allocCapture (Track& t, juce::int64 frames)
 void Engine::armRec (Track& t)
 {
     t.recCount = 0; t.capCount = 0; t.closing = false;
+    t.onsetTake = false;
     t.jobId = ++jobSeq;
     if (sync && grid.on)
     {
@@ -157,6 +158,16 @@ void Engine::armRec (Track& t)
 
 void Engine::endRec (Track& t)
 {
+    if (t.onsetTake && sync && grid.on)
+    {
+        const auto barF = juce::jmax ((juce::int64) 1, (juce::int64) juce::roundToInt (grid.barS * sr));
+        const auto k = juce::jmax ((juce::int64) 1,
+                (juce::int64) std::ceil ((double) (curF() + kMarginFr - t.startF) / (double) barF));
+        if (t.bars > 0 && t.stopF != 0 && t.startF + k * barF >= t.stopF) { t.closing = true; return; }
+        t.stopF = t.startF + k * barF;
+        t.closing = true;
+        return;
+    }
     if (sync && grid.on)
     {
         const auto barF = (juce::int64) juce::roundToInt (grid.barS * sr);
@@ -184,9 +195,8 @@ void Engine::armWatch (Track& t)
     t.jobId = ++jobSeq;
     t.gateOpen = false;    // bref silence requis (anti queue de phrase), ouverture forcée après 1,5 s
     t.armedF = curF();
-    t.watchMain = sync && grid.on;      // grille posée → le son déclenche un armement quantisé
-    if (! t.watchMain)
-        allocCapture (t, (juce::int64) (kMaxLoopSec * sr));
+    t.watchMain = false;   // détection audio sample-accurate dans TOUS les cas
+    allocCapture (t, (juce::int64) (kMaxLoopSec * sr));
     t.st = St::Wait;
 }
 
@@ -363,18 +373,8 @@ void Engine::uiTick()
             if (autoRec && i == sel && t.st == St::Empty) { armWatch (t); continue; }
             if (t.st == St::Wait)
             {
-                if (! autoRec || i != sel)                       { cancelWatch (t); continue; }
-                if (! t.watchMain && sync && grid.on)            { cancelWatch (t); armWatch (t); continue; }
-                if (t.watchMain)
-                {
-                    if (! t.gateOpen)
-                    {
-                        const bool quiet   = curF() - lastAboveF.load() > (juce::int64) (0.08 * sr);
-                        const bool timeout = curF() - t.armedF          > (juce::int64) (1.5  * sr);
-                        if (quiet || timeout) t.gateOpen = true;
-                    }
-                    if (t.gateOpen && inPeak.load() >= (float) thresh) armRec (t);
-                }
+                if (! autoRec || i != sel) { cancelWatch (t); continue; }
+                // le déclenchement (gate + seuil + attaque) vit dans le thread audio
             }
             if (t.st == St::Rec && ! t.closing && t.stopF == 0
                 && curF() - t.startF > (juce::int64) (kMaxLoopSec * sr))
@@ -722,7 +722,7 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
     }
     for (auto& t : tr)
     {
-        if (t.st == St::Wait && ! t.watchMain && t.jobId > 0)
+        if (t.st == St::Wait && t.jobId > 0)
         {
             if (! t.gateOpen)
             {
@@ -749,8 +749,17 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                     ++t.capCount;
                 }
                 t.watchMain = false;
-                t.startF = start;   // provisoire (le thread message ré-applique -comp)
-                t.stopF = 0;
+                t.startF = start - compF();
+                if (sync && grid.on && t.bars > 0)
+                {
+                    // prise calée sur TON attaque : longueur forcée à N mesures exactes,
+                    // rebouclage en phase avec la grille (L multiple de la mesure)
+                    const auto barF = juce::jmax ((juce::int64) 1,
+                                                  (juce::int64) juce::roundToInt (grid.barS * sr));
+                    t.stopF = t.startF + (juce::int64) t.bars * barF;
+                    t.onsetTake = true;
+                }
+                else { t.stopF = 0; t.onsetTake = (sync && grid.on); }
                 startedAt[(size_t) (&t - tr.data())].store (start);
                 t.st = St::Rec;     // capture active dès maintenant
                 // pas de continue : la capture ci-dessous prend la suite du bloc courant
