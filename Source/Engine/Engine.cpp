@@ -173,6 +173,7 @@ void Engine::cancelRec (Track& t)
 void Engine::armWatch (Track& t)
 {
     t.capCount = 0; t.closing = false;
+    t.gateOpen = false;    // exige un vrai silence avant d'écouter (anti queue de phrase)
     t.jobId = ++jobSeq;
     t.watchMain = sync && grid.on;      // grille posée → le son déclenche un armement quantisé
     if (! t.watchMain)
@@ -324,7 +325,12 @@ void Engine::uiTick()
         {
             if (! autoRec || i != sel)                       { cancelWatch (t); continue; }
             if (! t.watchMain && sync && grid.on)            { cancelWatch (t); armWatch (t); continue; }
-            if (t.watchMain && inPeak.load() >= (float) thresh) { armRec (t); }
+            if (t.watchMain)
+            {
+                if (! t.gateOpen && curF() - lastAboveF.load() > (juce::int64) (0.12 * sr))
+                    t.gateOpen = true;
+                if (t.gateOpen && inPeak.load() >= (float) thresh) armRec (t);
+            }
         }
         // garde-fou longueur max
         if (t.st == St::Rec && ! t.closing && t.stopF == 0
@@ -526,6 +532,11 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
     {
         if (t.st == St::Wait && ! t.watchMain && t.jobId > 0)
         {
+            if (! t.gateOpen)
+            {
+                if (b0 - lastAboveF.load() > (juce::int64) (0.12 * sr)) t.gateOpen = true;
+                else continue;   // encore du son (queue de la prise précédente) : on attend le silence
+            }
             int hit = -1;
             const float th = (float) thresh;
             for (int q = 0; q < n; ++q)
@@ -743,6 +754,8 @@ void Engine::process (juce::AudioBuffer<float>& io)
     juce::ScopedLock l (lock);   // les blocs sont courts ; l'UI ne tient le lock que brièvement
 
     runCaptureAndWatch (icL, icR, n, b0);
+    if (inPeak.load() >= (float) thresh)
+        lastAboveF.store (b0 + n);
 
     io.clear();
     renderTracks (icL, icR, io, n);

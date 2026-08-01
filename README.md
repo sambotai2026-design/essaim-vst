@@ -55,5 +55,10 @@ flèches ◀▶ = piste d'entrée, ▲▼ = mesures de la piste sélectionnée.
   (licence Steinberg : le SDK n'est pas redistribué dans ce repo). Si le
   téléchargement échoue, le build sort quand même — sans ASIO (WASAPI/DirectSound).
 - `pluginval` (niveau 5) tourne sur chaque build.
+- AUTOREC : gate de réarmement — après chaque boucle, la piste en ÉCOUTE exige
+  ~120 ms de silence sous le seuil avant d'accepter un nouveau son (la queue de
+  la phrase précédente ne déclenche plus la piste suivante). Si les enceintes
+  repissent dans le micro au-dessus du seuil, la piste reste en ÉCOUTE sans se
+  déclencher : monte le seuil (%) ou passe au casque.
 - Fin d'enregistrement échantillon-précise (le relais REC→PLAY se fait dans le
   thread audio) + fondu enchaîné ~5 ms au point de bouclage : pas de clic.

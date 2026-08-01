@@ -53,6 +53,7 @@ struct Track
     int     bars      = 4;          // 0 = MAN
     bool    closing   = false;
     bool    watchMain = false;      // écoute déclencheur (grille posée)
+    bool    gateOpen  = false;      // ÉCOUTE : un silence de ~120 ms est requis avant d'accepter un son
     juce::int64 startF = 0, stopF = 0;   // frames "musicales"
     juce::int64 anchorF = 0;             // ancre de phase (playT0)
     int     jobId     = -1;
@@ -193,6 +194,7 @@ private:
     double sr = 48000.0;
     std::atomic<juce::int64> gf { 0 };          // compteur global de frames
     std::atomic<float> inPeak { 0.f }, inVuA { 0.f }, masterVuA { 0.f };
+    std::atomic<juce::int64> lastAboveF { -1000000000LL };   // dernier bloc où l'entrée dépassait le seuil
     std::atomic<float> masterGain { 0.8626f };   // pow(108/127,1.5)*1.1 — défaut du proto
 
     // ring pré-roll
