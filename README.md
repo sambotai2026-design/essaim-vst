@@ -28,6 +28,15 @@ taille de buffer, fréquence. En **VST3**, l'audio est routé par le DAW.
 - **Standalone** : lance `LESSAIM.exe` où tu veux. Bouton **AUDIO** → **OUVRIR LE
   PANNEAU AUDIO (ASIO)** → choisis le driver ASIO du FLX10, les canaux, le buffer.
 
+## ANTI-RETOUR (cartes qui renvoient leur mix, ex. DDJ-FLX10)
+
+Certaines cartes DJ renvoient leur **mix complet** dans l'entrée USB — le looper
+s'entend lui-même et ré-enregistre ses boucles. Le mode **ANTI-RETOUR** (panneau
+AUDIO, activé par défaut) apprend automatiquement le délai et le niveau du
+retour dès qu'une boucle joue, puis **soustrait la propre sortie du looper de
+l'entrée** : la voix reste, les boucles s'effacent. Statut affiché
+(« calibré — délai X ms »). Se recalibre seul si le buffer ou le niveau change.
+
 ## Sessions
 
 Panneau **AUDIO** → section **SESSION** : `SAUVER…` / `CHARGER…` produit un fichier

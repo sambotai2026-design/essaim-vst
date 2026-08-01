@@ -14,7 +14,9 @@ constexpr int    kNumTracks   = 8;
 constexpr double kMaxLoopSec  = 120.0;
 constexpr int    kMarginFr    = 1536;   // avance d'armement (frames)
 constexpr int    kPreRollFr   = 384;    // pré-roll auto-rec (~8 ms)
-constexpr int    kRingLen     = 8192;   // ring de pré-roll
+constexpr int    kRingLen     = 32768;  // ring d'entrée (pré-roll + calibration anti-retour)
+constexpr int    kOutRing     = 1 << 18; // ring de sortie (référence anti-retour, ~5 s)
+constexpr int    kDecShift    = 4;       // décimation ÷16 pour la recherche de délai
 constexpr int    kWavePoints  = 256;    // paires min/max envoyées à l'UI
 constexpr int    kXFadeFr     = 256;    // fondu enchaîné au point de bouclage (~5 ms)
 
@@ -137,6 +139,7 @@ public:
                    float vu, pos; int recCount; double durS; };
         std::array<T, kNumTracks> tr;
         Grid grid; int sel; bool sync, mon, adv, arec; bool loopback;
+        bool aec, aecCal; double aecMs;
         double thresh, compMs; float inVu, masterVu;
     };
     Snapshot snapshot();
@@ -159,6 +162,8 @@ public:
     // sauvegarde/restauration (réglages, pas les boucles)
     juce::ValueTree toState() const;
     void fromState (const juce::ValueTree&);
+
+    void setAntiRetour (bool b) { aecOn.store (b); if (! b) aecD.store (-1); }
 
     // session complète : réglages + boucles audio (format .essaim)
     bool saveSession (juce::OutputStream& os);
@@ -196,6 +201,18 @@ private:
     std::atomic<juce::int64> gf { 0 };          // compteur global de frames
     std::atomic<float> inPeak { 0.f }, inVuA { 0.f }, masterVuA { 0.f };
     std::atomic<juce::int64> lastAboveF { -1000000000LL };   // dernier bloc où l'entrée dépassait le seuil
+
+    // ---- ANTI-RETOUR : soustraction de la propre sortie (annulation d'écho) ----
+    std::atomic<bool>  aecOn { true };
+    std::atomic<juce::int64> aecD { -1 };        // délai calibré (frames), -1 = pas calibré
+    std::atomic<float> aecGL { 0.f }, aecGR { 0.f };
+    std::atomic<float> aecQ { 0.f };             // qualité de calibration (corrélation 0..1)
+    bool aecSearching = false;
+    int  aecBadTicks = 0;                        // résidu corrélé → recalibrage
+    std::vector<float> outRingL, outRingR;       // sortie finale (référence), adressage par frame
+    std::vector<float> decIn, decOut;            // copies décimées ÷16 (mono) pour la recherche
+    int   decW = 0; float decAccI = 0.f, decAccO = 0.f; int decCnt = 0;
+    void  aecEstimate();                         // recherche délai+gain (thread message, hors lock)
 
     // détection de repisse : l'enveloppe d'entrée suit-elle l'enveloppe de sortie ?
     static constexpr int kLbWin = 32;

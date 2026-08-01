@@ -88,6 +88,13 @@ void Engine::prepare (double newSr, int maxBlock)
     rvbBusBuf.setSize (2, maxBlock);
     scratch.setSize (2, maxBlock);
     inBuf.setSize (2, maxBlock);
+
+    outRingL.assign ((size_t) kOutRing, 0.f);
+    outRingR.assign ((size_t) kOutRing, 0.f);
+    decIn.assign (8192, 0.f); decOut.assign (8192, 0.f);
+    decAccI = decAccO = 0.f;
+    aecD.store (-1); aecGL.store (0.f); aecGR.store (0.f); aecQ.store (0.f);
+    aecSearching = false; aecBadTicks = 0;
 }
 
 void Engine::releaseResources() {}
@@ -296,7 +303,7 @@ void Engine::setThresh (double v) { juce::ScopedLock l (lock); thresh = juce::jl
 void Engine::setCompMs (double v) { juce::ScopedLock l (lock); compMs = juce::jlimit (0.0, 300.0, v); }
 void Engine::setMasterGain01 (double g) { masterGain.store ((float) g); }
 
-// ---------- tick côté message : autorec, fins de capture, monitoring, repisse ----------
+// ---------- tick côté message : autorec, fins de capture, monitoring, repisse, anti-retour ----------
 void Engine::uiTick()
 {
     // fins de capture signalées par l'audio thread
@@ -304,91 +311,192 @@ void Engine::uiTick()
         if (doneFlag[(size_t) i].exchange (0) == 1)
             finishRec (i);
 
-    juce::ScopedLock l (lock);
+    bool wantCalib = false;
 
-    // départs watch signalés par l'audio thread
-    for (int i = 0; i < kNumTracks; ++i)
     {
-        const auto s = startedAt[(size_t) i].exchange (-1);
-        if (s >= 0 && (tr[(size_t) i].st == St::Wait || tr[(size_t) i].st == St::Rec))
+        juce::ScopedLock l (lock);
+
+        // départs watch signalés par l'audio thread
+        for (int i = 0; i < kNumTracks; ++i)
+        {
+            const auto s2 = startedAt[(size_t) i].exchange (-1);
+            if (s2 >= 0 && (tr[(size_t) i].st == St::Wait || tr[(size_t) i].st == St::Rec))
+            {
+                auto& t = tr[(size_t) i];
+                t.startF = juce::jmax ((juce::int64) 0, s2 - compF());
+                if (t.st == St::Wait) t.st = St::Rec;
+            }
+        }
+
+        // updateAutoWatch() — déclencheur SIMPLE : un seuil, un anti-queue court
+        for (int i = 0; i < kNumTracks; ++i)
         {
             auto& t = tr[(size_t) i];
-            t.startF = juce::jmax ((juce::int64) 0, s - compF());
-            if (t.st == St::Wait) t.st = St::Rec;
-        }
-    }
-
-    // updateAutoWatch() du proto — déclencheur SIMPLE : un seuil, un anti-queue court
-    for (int i = 0; i < kNumTracks; ++i)
-    {
-        auto& t = tr[(size_t) i];
-        if (autoRec && i == sel && t.st == St::Empty) { armWatch (t); continue; }
-        if (t.st == St::Wait)
-        {
-            if (! autoRec || i != sel)                       { cancelWatch (t); continue; }
-            if (! t.watchMain && sync && grid.on)            { cancelWatch (t); armWatch (t); continue; }
-            if (t.watchMain)
+            if (autoRec && i == sel && t.st == St::Empty) { armWatch (t); continue; }
+            if (t.st == St::Wait)
             {
-                if (! t.gateOpen)
+                if (! autoRec || i != sel)                       { cancelWatch (t); continue; }
+                if (! t.watchMain && sync && grid.on)            { cancelWatch (t); armWatch (t); continue; }
+                if (t.watchMain)
                 {
-                    const bool quiet   = curF() - lastAboveF.load() > (juce::int64) (0.08 * sr);
-                    const bool timeout = curF() - t.armedF          > (juce::int64) (1.5  * sr);
-                    if (quiet || timeout) t.gateOpen = true;
+                    if (! t.gateOpen)
+                    {
+                        const bool quiet   = curF() - lastAboveF.load() > (juce::int64) (0.08 * sr);
+                        const bool timeout = curF() - t.armedF          > (juce::int64) (1.5  * sr);
+                        if (quiet || timeout) t.gateOpen = true;
+                    }
+                    if (t.gateOpen && inPeak.load() >= (float) thresh) armRec (t);
                 }
-                if (t.gateOpen && inPeak.load() >= (float) thresh) armRec (t);
             }
-        }
-        // garde-fou longueur max
-        if (t.st == St::Rec && ! t.closing && t.stopF == 0
-            && curF() - t.startF > (juce::int64) (kMaxLoopSec * sr))
-            endRec (t);
-        // compteur de mesures pendant REC
-        if (t.st == St::Rec && t.bars > 0 && grid.on && sync && t.stopF != 0)
-        {
-            const auto barF = juce::jmax ((juce::int64) 1, (juce::int64) juce::roundToInt (grid.barS * sr));
-            t.recCount = (int) juce::jlimit ((juce::int64) 1, (juce::int64) t.bars,
-                                             (curF() - t.startF) / barF + 1);
-        }
-        else t.recCount = 0;
-    }
-
-    // monitoring via la piste sélectionnée
-    for (int i = 0; i < kNumTracks; ++i)
-        tr[(size_t) i].inTap.setTargetValue (monitor && i == sel ? 0.9f : 0.f);
-
-    // temps du delay suit la grille
-    dlyTime.setTargetValue ((float) grooveDelayTime());
-
-    // ---- détection de repisse : PUREMENT INDICATIVE, ne bloque rien ----
-    lbIn[lbW] = inVuA.load(); lbOut[lbW] = masterVuA.load();
-    lbW = (lbW + 1) % kLbWin; if (lbFill < kLbWin) ++lbFill;
-    bool detected = false;
-    if (! monitor && lbFill == kLbWin)
-    {
-        double mi = 0, mo = 0;
-        for (int k = 0; k < kLbWin; ++k) { mi += lbIn[k]; mo += lbOut[k]; }
-        mi /= kLbWin; mo /= kLbWin;
-        if (mo > 0.02 && mi > 0.5 * mo)      // entrée quasi au niveau de la sortie
-        {
-            double sio = 0, sii = 0, soo = 0;
-            for (int k = 0; k < kLbWin; ++k)
+            if (t.st == St::Rec && ! t.closing && t.stopF == 0
+                && curF() - t.startF > (juce::int64) (kMaxLoopSec * sr))
+                endRec (t);
+            if (t.st == St::Rec && t.bars > 0 && grid.on && sync && t.stopF != 0)
             {
-                const double a = lbIn[k] - mi, b = lbOut[k] - mo;
-                sio += a * b; sii += a * a; soo += b * b;
+                const auto barF = juce::jmax ((juce::int64) 1, (juce::int64) juce::roundToInt (grid.barS * sr));
+                t.recCount = (int) juce::jlimit ((juce::int64) 1, (juce::int64) t.bars,
+                                                 (curF() - t.startF) / barF + 1);
             }
-            const double denom = std::sqrt (sii * soo);
-            if (denom > 1e-9 && sio / denom > 0.9) detected = true;   // copie quasi certaine (câblage)
+            else t.recCount = 0;
+        }
+
+        for (int i = 0; i < kNumTracks; ++i)
+            tr[(size_t) i].inTap.setTargetValue (monitor && i == sel ? 0.9f : 0.f);
+
+        dlyTime.setTargetValue ((float) grooveDelayTime());
+
+        // ---- détection de repisse : PUREMENT INDICATIVE (sur l'entrée déjà nettoyée) ----
+        lbIn[lbW] = inVuA.load(); lbOut[lbW] = masterVuA.load();
+        lbW = (lbW + 1) % kLbWin; if (lbFill < kLbWin) ++lbFill;
+        bool detected = false;
+        if (! monitor && lbFill == kLbWin)
+        {
+            double mi = 0, mo = 0;
+            for (int k = 0; k < kLbWin; ++k) { mi += lbIn[k]; mo += lbOut[k]; }
+            mi /= kLbWin; mo /= kLbWin;
+            if (mo > 0.02 && mi > 0.5 * mo)
+            {
+                double sio = 0, sii = 0, soo = 0;
+                for (int k = 0; k < kLbWin; ++k)
+                {
+                    const double a = lbIn[k] - mi, b = lbOut[k] - mo;
+                    sio += a * b; sii += a * a; soo += b * b;
+                }
+                const double denom = std::sqrt (sii * soo);
+                if (denom > 1e-9 && sio / denom > 0.9) detected = true;
+            }
+        }
+        lbHold = detected ? 90 : juce::jmax (0, lbHold - 1);
+        loopback.store (lbHold > 0);
+        if (lbHold > 0 && curF() - lastLbToastF > (juce::int64) (30.0 * sr))
+        {
+            lastLbToastF = curF();
+            pushToast (juce::String::fromUTF8 ("\u26a0 L'entr\u00e9e ressemble fort \u00e0 la sortie (repisse). "
+                       "Si l'ANTI-RETOUR est actif, il se recalibre\u2026"), true);
+        }
+
+        // calibration ANTI-RETOUR : d\u00e8s qu'une sortie joue et que D est inconnu
+        if (aecOn.load() && ! aecSearching && aecD.load() < 0 && masterVuA.load() > 0.05f)
+        { aecSearching = true; wantCalib = true; }
+
+        // qualit\u00e9 : si l'entr\u00e9e nettoy\u00e9e reste corr\u00e9l\u00e9e \u00e0 la sortie, recalibrer
+        if (aecOn.load() && aecD.load() > 0 && loopback.load())
+        {
+            if (++aecBadTicks > 90) { aecBadTicks = 0; aecD.store (-1); }
+        }
+        else aecBadTicks = 0;
+    }
+
+    if (wantCalib)
+    {
+        aecEstimate();
+        aecSearching = false;
+    }
+}
+
+// ---------- calibration ANTI-RETOUR (thread message, hors lock audio) ----------
+void Engine::aecEstimate()
+{
+    // instantan\u00e9s
+    std::vector<float> di, dm;
+    juce::int64 nowF;
+    {
+        juce::ScopedLock l (lock);
+        di = decIn; dm = decOut; nowF = curF();
+    }
+    const int W = 2048;                                   // fen\u00eatre (d\u00e9cim\u00e9e) ~0,7 s
+    const auto head = (size_t) ((((juce::uint64) nowF) >> 4) & 8191u);
+    auto at = [&] (const std::vector<float>& v, long i) { return v[(size_t) (((long) head - 8 - i) & 8191)]; };
+    double so2 = 1e-12;
+    for (int i = 0; i < W; ++i) { const double o = at (dm, i); so2 += o * o; }
+    if (so2 < 1e-4) { aecSearching = false; return; }     // pas assez de signal de sortie
+
+    int bestLag = -1; double bestR = 0;
+    const int maxLag = juce::jmin (4000, (int) (1.2 * sr / 16.0));   // jusqu'\u00e0 ~1,2 s
+    for (int lag = 2; lag < maxLag; ++lag)
+    {
+        double dot = 0, si2 = 1e-12;
+        for (int i = 0; i < W; i += 2)
+        {
+            const double a = at (di, i), b = at (dm, i + lag);
+            dot += a * b; si2 += a * a;
+        }
+        const double r = dot / std::sqrt (si2 * so2 * 0.5);
+        if (r > bestR) { bestR = r; bestLag = lag; }
+    }
+    if (bestLag < 0 || bestR < 0.3)
+    {
+        pushToast (juce::String::fromUTF8 ("ANTI-RETOUR : calibration impossible pour l'instant (signal trop faible)."), true);
+        return;
+    }
+
+    // affinage pleine r\u00e9solution sur le ring d'entr\u00e9e (ring0/1) vs outRing
+    juce::int64 bestD = -1; double bestC = 0;
+    {
+        juce::ScopedLock l (lock);
+        const int N = 4096;
+        const auto endF = nowF - 64;
+        const auto d0 = (juce::int64) bestLag * 16;
+        for (juce::int64 d = juce::jmax ((juce::int64) 32, d0 - 48); d <= d0 + 48; ++d)
+        {
+            double dot = 0, si = 1e-12, so = 1e-12;
+            for (int i = 0; i < N; i += 2)
+            {
+                const auto f = endF - i;
+                const int  ri = (int) (((juce::int64) ringW + (f - nowF) + 16LL * kRingLen) % kRingLen);
+                const auto oi = (size_t) ((juce::uint64) (f - d) & (juce::uint64) (kOutRing - 1));
+                const double a = (ring0[(size_t) ri] + ring1[(size_t) ri]) * 0.5;
+                const double b = (outRingL[oi] + outRingR[oi]) * 0.5;
+                dot += a * b; si += a * a; so += b * b;
+            }
+            const double c = dot / std::sqrt (si * so);
+            if (c > bestC) { bestC = c; bestD = d; }
+        }
+        if (bestD > 0 && bestC > 0.4)
+        {
+            // gains initiaux par moindres carr\u00e9s
+            double eL = 0, eR = 0, oo = 1e-12;
+            const int N2 = 8192;
+            for (int i = 0; i < N2; i += 2)
+            {
+                const auto f = nowF - 64 - i;
+                const int  ri = (int) (((juce::int64) ringW + (f - nowF) + 16LL * kRingLen) % kRingLen);
+                const auto oi = (size_t) ((juce::uint64) (f - bestD) & (juce::uint64) (kOutRing - 1));
+                eL += (double) ring0[(size_t) ri] * outRingL[oi];
+                eR += (double) ring1[(size_t) ri] * outRingR[oi];
+                oo += (double) outRingL[oi] * outRingL[oi] + (double) outRingR[oi] * outRingR[oi];
+            }
+            aecGL.store ((float) juce::jlimit (0.0, 4.0, 2.0 * eL / oo));
+            aecGR.store ((float) juce::jlimit (0.0, 4.0, 2.0 * eR / oo));
+            aecD.store (bestD);
+            aecQ.store ((float) bestC);
         }
     }
-    lbHold = detected ? 90 : juce::jmax (0, lbHold - 1);   // ~1,5 s de maintien
-    loopback.store (lbHold > 0);
-    if (lbHold > 0 && curF() - lastLbToastF > (juce::int64) (30.0 * sr))
-    {
-        lastLbToastF = curF();
-        pushToast (juce::String::fromUTF8 ("⚠ L'entrée ressemble fort à la sortie (repisse/câblage). "
-                   "Seul le micro doit entrer sur CH3 (préampli), paire d'entrée = CH3, pas MIX/REC. "
-                   "Info seulement : rien n'est bloqué."), true);
-    }
+    if (bestD > 0 && bestC > 0.4)
+        pushToast (juce::String::fromUTF8 ("ANTI-RETOUR calibr\u00e9 : d\u00e9lai ")
+                   + juce::String (bestD * 1000.0 / sr, 1) + " ms.");
+    else
+        pushToast (juce::String::fromUTF8 ("ANTI-RETOUR : calibration \u00e9chou\u00e9e, nouvel essai au prochain son."), true);
 }
 
 // ---------- fin d'enregistrement (thread message) ----------
@@ -489,6 +597,9 @@ Engine::Snapshot Engine::snapshot()
     }
     s.grid = grid; s.sel = sel; s.sync = sync; s.mon = monitor; s.adv = autoAdv; s.arec = autoRec;
     s.loopback = loopback.load();
+    s.aec = aecOn.load();
+    s.aecCal = aecD.load() > 0;
+    s.aecMs = aecD.load() > 0 ? (double) aecD.load() * 1000.0 / sr : 0.0;
     s.thresh = thresh; s.compMs = compMs;
     s.inVu = inVuA.load(); s.masterVu = masterVuA.load();
     return s;
@@ -522,6 +633,7 @@ juce::ValueTree Engine::toState() const
     v.setProperty ("arec", autoRec, nullptr); v.setProperty ("thresh", thresh, nullptr);
     v.setProperty ("comp", compMs, nullptr);  v.setProperty ("sel", sel, nullptr);
     v.setProperty ("mon", monitor, nullptr);  v.setProperty ("mgain", (double) masterGain.load(), nullptr);
+    v.setProperty ("aec", aecOn.load(), nullptr);
     for (int i = 0; i < kNumTracks; ++i)
     {
         juce::ValueTree tv ("T"); auto& t = tr[(size_t) i];
@@ -546,6 +658,7 @@ void Engine::fromState (const juce::ValueTree& v)
     sel = (int) v.getProperty ("sel", 0);
     monitor = (bool) v.getProperty ("mon", false);
     masterGain.store ((float) (double) v.getProperty ("mgain", 0.8626));
+    aecOn.store ((bool) v.getProperty ("aec", true));
     for (int i = 0; i < juce::jmin (kNumTracks, v.getNumChildren()); ++i)
     {
         auto tv = v.getChild (i); auto& t = tr[(size_t) i];
@@ -787,8 +900,58 @@ void Engine::process (juce::AudioBuffer<float>& io)
     // copie d'entrée (io sera écrasé) — tampon préalloué dans prepare()
     inBuf.copyFrom (0, 0, inL, n);
     inBuf.copyFrom (1, 0, inR, n);
+
+    // ANTI-RETOUR : soustraire notre propre sortie (délai D, gains gL/gR calibrés)
+    // AVANT toute mesure/capture — le moteur ne voit plus que la voix.
+    if (aecOn.load() && ! outRingL.empty())
+    {
+        const auto D = aecD.load();
+        if (D > 0)
+        {
+            auto* wl = inBuf.getWritePointer (0);
+            auto* wr = inBuf.getWritePointer (1);
+            const float gL0 = aecGL.load(), gR0 = aecGR.load();
+            for (int q = 0; q < n; ++q)
+            {
+                const auto f = b0 + q - D;
+                if (f >= 0)
+                {
+                    const auto ix = (size_t) (f & (juce::int64) (kOutRing - 1));
+                    wl[q] -= gL0 * outRingL[ix];
+                    wr[q] -= gR0 * outRingR[ix];
+                }
+            }
+            // adaptation lente des gains (suit le master du FLX10)
+            double eo = 0, eiL = 0, eiR = 0;
+            for (int q = 0; q < n; q += 2)
+            {
+                const auto f = b0 + q - D; if (f < 0) continue;
+                const auto ix = (size_t) (f & (juce::int64) (kOutRing - 1));
+                const double oL2 = outRingL[ix], oR2 = outRingR[ix];
+                eo  += oL2 * oL2 + oR2 * oR2;
+                eiL += (double) wl[q] * oL2;
+                eiR += (double) wr[q] * oR2;
+            }
+            if (eo > 1e-4)
+            {
+                aecGL.store (juce::jlimit (0.f, 4.f, gL0 + (float) (1.2 * eiL / eo)));
+                aecGR.store (juce::jlimit (0.f, 4.f, gR0 + (float) (1.2 * eiR / eo)));
+            }
+        }
+    }
     const float* icL = inBuf.getReadPointer (0);
     const float* icR = inBuf.getReadPointer (1);
+
+    // décimation ÷16 de l'entrée nettoyée (indexée par frame absolue)
+    for (int q = 0; q < n; ++q)
+    {
+        decAccI += (icL[q] + icR[q]) * 0.5f;
+        if ((((juce::uint64) (b0 + q)) & 15u) == 15u)
+        {
+            decIn[(size_t) ((((juce::uint64) (b0 + q)) >> 4) & 8191u)] = decAccI * (1.f / 16.f);
+            decAccI = 0.f;
+        }
+    }
 
     // pic d'entrée
     {
@@ -848,6 +1011,23 @@ void Engine::process (juce::AudioBuffer<float>& io)
         auto* oL = io.getReadPointer (0); auto* oR = io.getReadPointer (1);
         for (int q = 0; q < n; q += 4) pk = juce::jmax (pk, juce::jmax (std::abs (oL[q]), std::abs (oR[q])));
         masterVuA.store (juce::jmax (pk, masterVuA.load() * 0.86f));
+    }
+
+    // référence ANTI-RETOUR : exactement ce qui part vers la carte, indexé par frame
+    if (! outRingL.empty())
+    {
+        const auto* oL = io.getReadPointer (0); const auto* oR = io.getReadPointer (1);
+        for (int q = 0; q < n; ++q)
+        {
+            const auto ix = (size_t) ((juce::uint64) (b0 + q) & (juce::uint64) (kOutRing - 1));
+            outRingL[ix] = oL[q]; outRingR[ix] = oR[q];
+            decAccO += (oL[q] + oR[q]) * 0.5f;
+            if ((((juce::uint64) (b0 + q)) & 15u) == 15u)
+            {
+                decOut[(size_t) ((((juce::uint64) (b0 + q)) >> 4) & 8191u)] = decAccO * (1.f / 16.f);
+                decAccO = 0.f;
+            }
+        }
     }
 
     gf.store (b0 + n);

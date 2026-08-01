@@ -310,6 +310,12 @@ kbd{ font-family:"JetBrains Mono",monospace; font-size:10px; background:var(--ce
     </div>
 
     <div class="apgrp">
+      <div class="aplbl">ANTI-RETOUR</div>
+      <div class="aprow"><button class="tgl" id="aecBtn" title="Soustrait la propre sortie du looper de l'entrée (retour du mix FLX10)">ANTI-RETOUR</button><span class="apnote" id="aecStat"></span></div>
+      <div class="apnote">Pour les cartes qui renvoient leur mix dans l'entrée (FLX10) : le moteur apprend le délai et annule ses propres boucles. Calibration automatique dès qu'une boucle joue.</div>
+    </div>
+
+    <div class="apgrp">
       <div class="aplbl">SESSION</div>
       <div class="aprow"><button class="tgl" id="sessSave" title="Tout sauver : boucles audio, effets, assignations, mesures, réglages">SAUVER…</button><button class="tgl" id="sessLoad" title="Recharger une session .essaim">CHARGER…</button></div>
       <div class="apnote">Tout est embarqué dans un fichier .essaim : boucles, effets, assignations, mesures, réglages. Au chargement, les pistes reviennent en STOP, en phase — PLAY pour les lancer.</div>
@@ -684,6 +690,13 @@ window.__push = function(s){
   }
 
   // panneau audio
+  const aBtn = $("#aecBtn"), aStat = $("#aecStat");
+  if(aBtn){
+    aBtn.classList.toggle("on", !!s.aec);
+    if(aStat) aStat.textContent = !s.aec ? "inactif"
+      : (s.aecCal ? "calibr\u00e9 \u2014 d\u00e9lai " + (s.aecMs||0).toFixed(1) + " ms"
+                  : "en attente d\u2019une boucle pour calibrer\u2026");
+  }
   $("#asioBtn").style.display = s.standalone ? "" : "none";
   $("#audioNote").textContent = s.standalone
     ? "Standalone : panneau natif — driver ASIO, chaque entrée/sortie de ta carte, buffer, fréquence."
@@ -746,6 +759,8 @@ function initTopbar(){
   $("#audioClose").addEventListener("click", () => $("#audioPanel").classList.add("hidden"));
   $("#audioPanel").addEventListener("click", e => { if(e.target === $("#audioPanel")) $("#audioPanel").classList.add("hidden"); });
   $("#asioBtn").addEventListener("click", () => bridge.emit({ fn:"audio" }));
+  const aB = $("#aecBtn");
+  if(aB) aB.addEventListener("click", () => bridge.emit({ fn:"aec", v: aB.classList.contains("on") ? 0 : 1 }));
   const sS = $("#sessSave"), sL = $("#sessLoad");
   if(sS) sS.addEventListener("click", () => bridge.emit({ fn:"saveSession" }));
   if(sL) sL.addEventListener("click", () => bridge.emit({ fn:"loadSession" }));

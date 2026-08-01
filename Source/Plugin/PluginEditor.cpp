@@ -83,6 +83,7 @@ void EssaimEditor::handleUiEvent (const var& v)
     else if (fn == "comp")     e.setCompMs ((double) val);
     else if (fn == "master")   e.setMasterGain01 ((double) v.getProperty ("g", 0.85));
     else if (fn == "audio")    openAudioSettings();
+    else if (fn == "aec")      proc.engine.setAntiRetour (val != 0);
     else if (fn == "saveSession")
     {
         if (auto* top = getTopLevelComponent()) top->toFront (true);
@@ -198,6 +199,9 @@ juce::String EssaimEditor::buildStateJson()
     root->setProperty ("comp", snap.compMs);
     root->setProperty ("inVu", snap.inVu);
     root->setProperty ("lb", snap.loopback);
+    root->setProperty ("aec", snap.aec);
+    root->setProperty ("aecCal", snap.aecCal);
+    root->setProperty ("aecMs", snap.aecMs);
     root->setProperty ("masterVu", snap.masterVu);
 
     auto* midi = new DynamicObject();
