@@ -1,7 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-static juce::AudioProcessor::BusesProperties essaimBuses()
+EssaimProcessor::BusesProperties EssaimProcessor::essaimBuses()
 {
     // Standalone : 8 canaux par bus -> le panneau audio natif permet de cocher
     // PLUSIEURS paires d'entrée et de sortie en même temps.
@@ -10,7 +10,7 @@ static juce::AudioProcessor::BusesProperties essaimBuses()
                         == juce::AudioProcessor::wrapperType_Standalone;
     const auto in  = sa ? juce::AudioChannelSet::discreteChannels (8) : juce::AudioChannelSet::stereo();
     const auto out = sa ? juce::AudioChannelSet::discreteChannels (8) : juce::AudioChannelSet::stereo();
-    return juce::AudioProcessor::BusesProperties()
+    return BusesProperties()
              .withInput  ("Input",  in,  true)
              .withOutput ("Output", out, true);
 }
@@ -28,7 +28,8 @@ void EssaimProcessor::prepareToPlay (double sr, int block)
     engine.prepare (sr, block);
     stereoBuf.setSize (2, juce::jmax (16, block));
 }
-void EssaimProcessor::releaseResources()                   { engine.releaseResources(); }
+
+void EssaimProcessor::releaseResources() { engine.releaseResources(); }
 
 bool EssaimProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 {
