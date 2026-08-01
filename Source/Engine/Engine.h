@@ -216,6 +216,7 @@ private:
     std::atomic<float> aecGL { 0.f }, aecGR { 0.f };
     std::atomic<float> aecQ { 0.f };             // qualité de calibration (corrélation 0..1)
     bool aecSearching = false;
+    juce::int64 lastAecTryF = -1000000000LL;   // cooldown entre deux calibrations
     int  aecBadTicks = 0;                        // résidu corrélé → recalibrage
     std::vector<float> outRingL, outRingR;       // sortie finale (référence), adressage par frame
     std::vector<float> decIn, decOut;            // copies décimées ÷16 (mono) pour la recherche

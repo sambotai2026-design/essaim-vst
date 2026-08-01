@@ -467,8 +467,9 @@ void Engine::uiTick()
         }
 
         // calibration ANTI-RETOUR : d\u00e8s qu'une sortie joue et que D est inconnu
-        if (aecOn.load() && ! aecSearching && aecD.load() < 0 && masterVuA.load() > 0.05f)
-        { aecSearching = true; wantCalib = true; }
+        if (aecOn.load() && ! aecSearching && aecD.load() < 0 && masterVuA.load() > 0.05f
+            && curF() - lastAecTryF > (juce::int64) (2.0 * sr))
+        { aecSearching = true; wantCalib = true; lastAecTryF = curF(); }
 
         // qualit\u00e9 : si l'entr\u00e9e nettoy\u00e9e reste corr\u00e9l\u00e9e \u00e0 la sortie, recalibrer
         if (aecOn.load() && aecD.load() > 0 && loopback.load())
@@ -502,8 +503,9 @@ void Engine::aecEstimate()
     for (int i = 0; i < W; ++i) { const double o = at (dm, i); so2 += o * o; }
     if (so2 < 1e-4) { aecSearching = false; return; }     // pas assez de signal de sortie
 
-    int bestLag = -1; double bestR = 0;
     const int maxLag = juce::jmin (4000, (int) (1.2 * sr / 16.0));   // jusqu'\u00e0 ~1,2 s
+    std::vector<double> score ((size_t) maxLag, 0.0);
+    double bestR = 0;
     for (int lag = 2; lag < maxLag; ++lag)
     {
         double dot = 0, si2 = 1e-12;
@@ -513,8 +515,14 @@ void Engine::aecEstimate()
             dot += a * b; si2 += a * a;
         }
         const double r = dot / std::sqrt (si2 * so2 * 0.5);
-        if (r > bestR) { bestR = r; bestLag = lag; }
+        score[(size_t) lag] = r;
+        if (r > bestR) bestR = r;
     }
+    // signaux p\u00e9riodiques (m\u00e9tronome, boucles) : des alias apparaissent \u00e0
+    // vraiD\u00e9lai + k*p\u00e9riode. Le VRAI trajet est toujours le PREMIER pic fort.
+    int bestLag = -1;
+    for (int lag = 2; lag < maxLag; ++lag)
+        if (score[(size_t) lag] >= 0.85 * bestR) { bestLag = lag; break; }
     if (bestLag < 0 || bestR < 0.3)
     {
         pushToast (juce::String::fromUTF8 ("ANTI-RETOUR : calibration impossible pour l'instant (signal trop faible)."), true);
