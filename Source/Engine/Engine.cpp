@@ -330,7 +330,7 @@ void Engine::uiTick()
             {
                 if (! t.gateOpen && curF() - lastAboveF.load() > (juce::int64) (0.12 * sr))
                     t.gateOpen = true;
-                if (t.gateOpen && inPeak.load() >= (float) thresh)
+                if (t.gateOpen && ! loopback.load() && inPeak.load() >= (float) thresh)
                 {
                     // anti-repisse : si les boucles jouent, l'entrée doit DOMINER la sortie
                     // (voix près du micro : oui ; boucle qui revient par le câblage/l'air : non).
@@ -367,6 +367,37 @@ void Engine::uiTick()
 
     // temps du delay suit la grille
     dlyTime.setTargetValue ((float) grooveDelayTime());
+
+    // ---- détection de repisse (l'entrée est une copie de la sortie ?) ----
+    lbIn[lbW] = inVuA.load(); lbOut[lbW] = masterVuA.load();
+    lbW = (lbW + 1) % kLbWin; if (lbFill < kLbWin) ++lbFill;
+    bool detected = false;
+    if (! monitor && lbFill == kLbWin)
+    {
+        double mi = 0, mo = 0;
+        for (int k = 0; k < kLbWin; ++k) { mi += lbIn[k]; mo += lbOut[k]; }
+        mi /= kLbWin; mo /= kLbWin;
+        if (mo > 0.02 && mi > 0.15 * mo)      // sortie active, entrée non négligeable
+        {
+            double sio = 0, sii = 0, soo = 0;
+            for (int k = 0; k < kLbWin; ++k)
+            {
+                const double a = lbIn[k] - mi, b = lbOut[k] - mo;
+                sio += a * b; sii += a * a; soo += b * b;
+            }
+            const double denom = std::sqrt (sii * soo);
+            if (denom > 1e-9 && sio / denom > 0.8) detected = true;   // enveloppes corrélées
+        }
+    }
+    lbHold = detected ? 90 : juce::jmax (0, lbHold - 1);   // ~1,5 s de maintien
+    loopback.store (lbHold > 0);
+    if (lbHold > 0 && curF() - lastLbToastF > (juce::int64) (20.0 * sr))
+    {
+        lastLbToastF = curF();
+        pushToast (juce::String::fromUTF8 ("⚠ REPISSE : l'entrée du looper reçoit sa propre sortie. "
+                   "Débranche toute liaison booth/master → CH3 (l'entrée doit contenir UNIQUEMENT le micro via le préampli) "
+                   "et vérifie la paire d'entrée (CH3, pas MIX/REC). AUTOREC est verrouillé tant que ça dure."), true);
+    }
 }
 
 // ---------- fin d'enregistrement (thread message) ----------
@@ -466,6 +497,7 @@ Engine::Snapshot Engine::snapshot()
                                       o.fxRow[(size_t) r] = t.fx[(int) t.assign[(size_t) r]]; }
     }
     s.grid = grid; s.sel = sel; s.sync = sync; s.mon = monitor; s.adv = autoAdv; s.arec = autoRec;
+    s.loopback = loopback.load();
     s.thresh = thresh; s.compMs = compMs;
     s.inVu = inVuA.load(); s.masterVu = masterVuA.load();
     return s;
@@ -547,6 +579,7 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
     {
         if (t.st == St::Wait && ! t.watchMain && t.jobId > 0)
         {
+            if (loopback.load()) continue;   // repisse détectée : pas de déclenchement
             if (! t.gateOpen)
             {
                 if (b0 - lastAboveF.load() > (juce::int64) (0.12 * sr)) t.gateOpen = true;

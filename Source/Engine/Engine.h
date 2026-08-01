@@ -136,7 +136,7 @@ public:
                    std::array<int,3> fxRow; std::array<int,3> asg;
                    float vu, pos; int recCount; double durS; };
         std::array<T, kNumTracks> tr;
-        Grid grid; int sel; bool sync, mon, adv, arec;
+        Grid grid; int sel; bool sync, mon, adv, arec; bool loopback;
         double thresh, compMs; float inVu, masterVu;
     };
     Snapshot snapshot();
@@ -196,6 +196,13 @@ private:
     std::atomic<juce::int64> gf { 0 };          // compteur global de frames
     std::atomic<float> inPeak { 0.f }, inVuA { 0.f }, masterVuA { 0.f };
     std::atomic<juce::int64> lastAboveF { -1000000000LL };   // dernier bloc où l'entrée dépassait le seuil
+
+    // détection de repisse : l'enveloppe d'entrée suit-elle l'enveloppe de sortie ?
+    static constexpr int kLbWin = 32;
+    float lbIn[kLbWin] {}, lbOut[kLbWin] {};
+    int   lbW = 0, lbFill = 0, lbHold = 0;
+    juce::int64 lastLbToastF = -1000000000LL;
+    std::atomic<bool> loopback { false };
     std::atomic<float> masterGain { 0.8626f };   // pow(108/127,1.5)*1.1 — défaut du proto
 
     // ring pré-roll

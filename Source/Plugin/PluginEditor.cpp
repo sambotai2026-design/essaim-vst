@@ -197,6 +197,7 @@ juce::String EssaimEditor::buildStateJson()
     root->setProperty ("thresh", juce::roundToInt (snap.thresh * 100));
     root->setProperty ("comp", snap.compMs);
     root->setProperty ("inVu", snap.inVu);
+    root->setProperty ("lb", snap.loopback);
     root->setProperty ("masterVu", snap.masterVu);
 
     auto* midi = new DynamicObject();

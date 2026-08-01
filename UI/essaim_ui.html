@@ -657,6 +657,12 @@ window.__push = function(s){
   if(document.activeElement !== $("#comp"))   $("#comp").value = Math.round(s.comp);
 
   $("#inVu").style.transform = "scaleX(" + clamp(s.inVu * 1.3, 0, 1).toFixed(3) + ")";
+  const inWrap = $("#inVu").parentElement;
+  if(inWrap){
+    if(s.lb){ inWrap.style.outline = "2px solid #ff5f56"; inWrap.style.outlineOffset = "1px";
+              inWrap.title = "REPISSE : l'entrée reçoit la sortie du looper — corrige le câblage (micro seul via préampli → CH3)"; }
+    else    { inWrap.style.outline = ""; inWrap.title = ""; }
+  }
   const v2 = $("#inVu2"); if(v2) v2.style.transform = "scaleX(" + clamp(s.inVu * 1.3, 0, 1).toFixed(3) + ")";
   $("#masterVu").style.transform = "scaleX(" + clamp(s.masterVu, 0, 1).toFixed(3) + ")";
 
