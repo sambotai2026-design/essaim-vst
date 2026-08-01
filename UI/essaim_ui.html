@@ -274,6 +274,14 @@ kbd{ font-family:"JetBrains Mono",monospace; font-size:10px; background:var(--ce
   </div>
 
   <div class="hgroup">
+    <span class="lbl">BPM</span>
+    <input type="number" id="bpm" min="0" max="300" step="0.1" placeholder="auto" title="Tempo maître : la grille existe AVANT la 1ère boucle — toutes les prises (même la première) s'arrêtent pile aux mesures choisies. Vide = auto (la 1ère boucle pose la grille).">
+    <button class="tgl" id="tapBtn" title="Tape le tempo (2+ frappes)">TAP</button>
+    <button class="tgl" id="clickBtn" title="Métronome calé sur la grille (accent en début de mesure)">CLICK</button>
+  </div>
+
+
+  <div class="hgroup">
     <button class="tgl on" id="syncBtn" title="La 1ère loop définit la grille ; départs/fins calés dessus">SYNC</button>
     <span class="lbl">COMP</span>
     <input type="number" id="comp" min="0" max="300" step="1" value="0" title="Compensation de latence d'entrée (ms)">
@@ -556,7 +564,7 @@ function buildStrips(){
     s.querySelector(".hex").addEventListener("click", () => bridge.emit({ fn:"sel", i:t.i }));
 
     t.ui.barSel = s.querySelector(".barSel");
-    [["1","1 M"],["2","2 M"],["4","4 M"],["8","8 M"],["16","16 M"],["32","32 M"],["0","MAN"]].forEach(([v,l]) => {
+    [["1","1 M"],["2","2 M"],["4","4 M"],["8","8 M"],["16","16 M"],["32","32 M"],["64","64 M"],["0","MAN"]].forEach(([v,l]) => {
       const o = document.createElement("option"); o.value = v; o.textContent = l;
       t.ui.barSel.appendChild(o);
     });
@@ -690,6 +698,13 @@ window.__push = function(s){
   }
 
   // panneau audio
+  const bIn = $("#bpm");
+  if(bIn && document.activeElement !== bIn){
+    bIn.value = s.bpm > 0 ? String(Math.round(s.bpm*10)/10) : "";
+    bIn.placeholder = (!s.bpm && s.grid && s.grid.on && s.grid.bar > 0)
+      ? String(Math.round(2400/s.grid.bar)/10) : "auto";
+  }
+  const cBt = $("#clickBtn"); if(cBt) cBt.classList.toggle("on", !!s.click);
   const aBtn = $("#aecBtn"), aStat = $("#aecStat");
   if(aBtn){
     aBtn.classList.toggle("on", !!s.aec);
@@ -759,6 +774,25 @@ function initTopbar(){
   $("#audioClose").addEventListener("click", () => $("#audioPanel").classList.add("hidden"));
   $("#audioPanel").addEventListener("click", e => { if(e.target === $("#audioPanel")) $("#audioPanel").classList.add("hidden"); });
   $("#asioBtn").addEventListener("click", () => bridge.emit({ fn:"audio" }));
+  const bpmIn = $("#bpm");
+  if(bpmIn) bpmIn.addEventListener("change", () => {
+    const v = parseFloat(bpmIn.value);
+    bridge.emit({ fn:"bpm", g: (isFinite(v) && v > 0) ? v : 0 });
+  });
+  let taps = [];
+  const tapB = $("#tapBtn");
+  if(tapB) tapB.addEventListener("click", () => {
+    const now = performance.now();
+    taps = taps.filter(t => now - t < 3000); taps.push(now);
+    if(taps.length >= 2){
+      const iv = (taps[taps.length-1] - taps[0]) / (taps.length - 1);
+      const b = Math.round(600000 / iv) / 10;
+      if(bpmIn) bpmIn.value = b;
+      bridge.emit({ fn:"bpm", g: b });
+    }
+  });
+  const clkB = $("#clickBtn");
+  if(clkB) clkB.addEventListener("click", () => bridge.emit({ fn:"click", v: clkB.classList.contains("on") ? 0 : 1 }));
   const aB = $("#aecBtn");
   if(aB) aB.addEventListener("click", () => bridge.emit({ fn:"aec", v: aB.classList.contains("on") ? 0 : 1 }));
   const sS = $("#sessSave"), sL = $("#sessLoad");

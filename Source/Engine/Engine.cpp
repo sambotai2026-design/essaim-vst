@@ -234,7 +234,12 @@ void Engine::clearTrack (int i)
     t.pos.store (0.f);
     bool allEmpty = true;
     for (auto& x : tr) if (x.hasBuf || x.st != St::Empty) { allEmpty = false; break; }
-    if (allEmpty) { grid = {}; dlyTime.setTargetValue ((float) grooveDelayTime()); }
+    if (allEmpty)
+    {
+        grid = {}; gridFromBpm = false;
+        if (bpm > 0) poseGridFromBpmLocked();
+        dlyTime.setTargetValue ((float) grooveDelayTime());
+    }
     UiEvent e; e.type = UiEvent::Wave; e.track = i;   // vague vide → efface le canvas
     juce::ScopedLock el (evLock); events.push_back (std::move (e));
 }
@@ -302,11 +307,11 @@ void Engine::setBars (int i, int b)
 
 void Engine::stepBars (int i, int dir)
 {
-    static const int steps[] { 0, 1, 2, 4, 8, 16, 32 };
+    static const int steps[] { 0, 1, 2, 4, 8, 16, 32, 64 };
     juce::ScopedLock l (lock);
     auto& t = tr[(size_t) i];
-    int idx = 0; for (int k = 0; k < 7; ++k) if (steps[k] == t.bars) idx = k;
-    idx = juce::jlimit (0, 6, idx + dir);
+    int idx = 0; for (int k = 0; k < 8; ++k) if (steps[k] == t.bars) idx = k;
+    idx = juce::jlimit (0, 7, idx + dir);
     t.bars = steps[idx];
     if ((t.st == St::Pending || t.st == St::Rec) && ! t.closing
         && sync && grid.on && t.jobId > 0)
@@ -338,6 +343,44 @@ void Engine::setAutoRec (bool b)
                       + juce::String (juce::roundToInt (thresh * 100)) + " %).");
 }
 void Engine::setThresh (double v) { juce::ScopedLock l (lock); thresh = juce::jlimit (0.01, 0.5, v); }
+
+void Engine::poseGridFromBpmLocked()
+{
+    grid.on   = true;
+    grid.barS = 4.0 * 60.0 / bpm;          // 4/4
+    grid.lenS = grid.barS;
+    grid.t0S  = (double) curF() / sr;
+    gridFromBpm = true;
+    dlyTime.setTargetValue ((float) grooveDelayTime());
+}
+
+void Engine::setBpm (double b)
+{
+    juce::ScopedLock l (lock);
+    bpm = b <= 0 ? 0.0 : juce::jlimit (30.0, 300.0, b);
+    bool anyBuf = false;
+    for (auto& t : tr) if (t.hasBuf || t.st == St::Rec || t.st == St::Pending) { anyBuf = true; break; }
+    if (bpm > 0)
+    {
+        if (! anyBuf)
+        {
+            poseGridFromBpmLocked();
+            pushToast (juce::String::fromUTF8 ("Tempo maître : ") + juce::String (bpm, 1)
+                       + juce::String::fromUTF8 (" BPM — grille armée. Toutes les prises s'arrêtent pile aux mesures choisies."));
+        }
+        else
+            pushToast (juce::String::fromUTF8 ("Tempo noté (") + juce::String (bpm, 1)
+                       + juce::String::fromUTF8 (" BPM) — appliqué après CLEAR ALL."), true);
+    }
+    else if (gridFromBpm && ! anyBuf)
+    {
+        grid = {}; gridFromBpm = false;
+        dlyTime.setTargetValue ((float) grooveDelayTime());
+        pushToast (juce::String::fromUTF8 ("Tempo auto : la 1\u00e8re boucle posera la grille."));
+    }
+}
+
+void Engine::setClick (bool on) { juce::ScopedLock l (lock); clickOn = on; }
 void Engine::setCompMs (double v) { juce::ScopedLock l (lock); compMs = juce::jlimit (0.0, 300.0, v); }
 void Engine::setMasterGain01 (double g) { masterGain.store ((float) g); }
 
@@ -419,7 +462,7 @@ void Engine::uiTick()
         if (lbHold > 0 && curF() - lastLbToastF > (juce::int64) (30.0 * sr))
         {
             lastLbToastF = curF();
-            pushToast (juce::String::fromUTF8 ("\u26a0 L'entr\u00e9e ressemble fort \u00e0 la sortie (repisse). "
+            pushToast (juce::String::fromUTF8 ("(!) L'entr\u00e9e ressemble fort \u00e0 la sortie (repisse). "
                        "Si l'ANTI-RETOUR est actif, il se recalibre\u2026"), true);
         }
 
@@ -552,6 +595,7 @@ void Engine::finishRec (int idx)
 
         if (! grid.on)
         {
+            gridFromBpm = false;
             const int nb = t.bars > 0 ? t.bars : 1;
             const auto barFexact = juce::jmax ((juce::int64) 1, (t.bufLen + nb / 2) / nb);
             t.bufLen = juce::jmin ((juce::int64) t.buf.getNumSamples(), barFexact * nb);
@@ -629,6 +673,7 @@ Engine::Snapshot Engine::snapshot()
     }
     s.grid = grid; s.sel = sel; s.sync = sync; s.mon = monitor; s.adv = autoAdv; s.arec = autoRec;
     s.loopback = loopback.load();
+    s.bpm = bpm; s.click = clickOn; s.gridFromBpm = gridFromBpm;
     s.aec = aecOn.load();
     s.aecCal = aecD.load() > 0;
     s.aecMs = aecD.load() > 0 ? (double) aecD.load() * 1000.0 / sr : 0.0;
@@ -666,6 +711,8 @@ juce::ValueTree Engine::toState() const
     v.setProperty ("comp", compMs, nullptr);  v.setProperty ("sel", sel, nullptr);
     v.setProperty ("mon", monitor, nullptr);  v.setProperty ("mgain", (double) masterGain.load(), nullptr);
     v.setProperty ("aec", aecOn.load(), nullptr);
+    v.setProperty ("bpm", bpm, nullptr);
+    v.setProperty ("click", clickOn, nullptr);
     for (int i = 0; i < kNumTracks; ++i)
     {
         juce::ValueTree tv ("T"); auto& t = tr[(size_t) i];
@@ -691,6 +738,8 @@ void Engine::fromState (const juce::ValueTree& v)
     monitor = (bool) v.getProperty ("mon", false);
     masterGain.store ((float) (double) v.getProperty ("mgain", 0.8626));
     aecOn.store ((bool) v.getProperty ("aec", true));
+    bpm = (double) v.getProperty ("bpm", 0.0);
+    clickOn = (bool) v.getProperty ("click", false);
     for (int i = 0; i < juce::jmin (kNumTracks, v.getNumChildren()); ++i)
     {
         auto tv = v.getChild (i); auto& t = tr[(size_t) i];
@@ -1050,6 +1099,31 @@ void Engine::process (juce::AudioBuffer<float>& io)
         limiter.process (cx);
     }
     io.applyGain (1.25f);
+
+    // métronome (CLICK) : bip calé sur la grille, accent au début de mesure
+    if (clickOn && grid.on && grid.barS > 0)
+    {
+        auto* oL = io.getWritePointer (0); auto* oR = io.getWritePointer (1);
+        const auto barF  = juce::jmax ((juce::int64) 8, (juce::int64) juce::roundToInt (grid.barS * sr));
+        const auto beatF = juce::jmax ((juce::int64) 2, barF / 4);
+        const auto t0F   = (juce::int64) juce::roundToInt (grid.t0S * sr);
+        const int  lenF  = (int) (0.012 * sr);
+        for (int q = 0; q < n; ++q)
+        {
+            const auto f  = b0 + q - t0F;
+            if (f < 0) continue;
+            const auto ib = f % beatF;
+            if (ib < lenF)
+            {
+                const bool accent = (f % barF) < beatF;
+                const float ph = (float) ib / (float) sr;
+                const float env = 1.f - (float) ib / (float) lenF;
+                const float v = std::sin (juce::MathConstants<float>::twoPi * (accent ? 1760.f : 880.f) * ph)
+                                * env * env * (accent ? 0.5f : 0.32f);
+                oL[q] += v; oR[q] += v;
+            }
+        }
+    }
     {
         float pk = 0.f;
         auto* oL = io.getReadPointer (0); auto* oR = io.getReadPointer (1);

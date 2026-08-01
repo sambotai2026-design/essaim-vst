@@ -28,8 +28,7 @@ void EssaimProcessor::prepareToPlay (double sr, int block)
     engine.prepare (sr, block);
     stereoBuf.setSize (2, juce::jmax (16, block));
 }
-
-void EssaimProcessor::releaseResources() { engine.releaseResources(); }
+void EssaimProcessor::releaseResources()                   { engine.releaseResources(); }
 
 bool EssaimProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 {

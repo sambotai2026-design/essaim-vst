@@ -28,6 +28,16 @@ taille de buffer, fréquence. En **VST3**, l'audio est routé par le DAW.
 - **Standalone** : lance `LESSAIM.exe` où tu veux. Bouton **AUDIO** → **OUVRIR LE
   PANNEAU AUDIO (ASIO)** → choisis le driver ASIO du FLX10, les canaux, le buffer.
 
+## Tempo maître (BPM / TAP / CLICK)
+
+Champ **BPM** dans la barre du haut (ou bouton **TAP** : tape le tempo) : la
+grille existe **avant** la première boucle, et le métronome **CLICK** te cale.
+Résultat : **toutes** les prises — y compris la première — démarrent sur ton
+attaque et s'arrêtent **pile** au nombre de mesures choisi (1/2/4/8/16/32/64,
+ou MAN = libre sans mesures). Longueurs exactes par construction : rien à
+étirer, le BPM n'est jamais modifié. Champ vide = mode auto historique (la
+première boucle pose la grille). Le tempo survit au CLEAR ALL.
+
 ## ANTI-RETOUR (cartes qui renvoient leur mix, ex. DDJ-FLX10)
 
 Certaines cartes DJ renvoient leur **mix complet** dans l'entrée USB — le looper

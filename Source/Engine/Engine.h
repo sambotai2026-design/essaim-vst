@@ -126,6 +126,8 @@ public:
     void setAutoAdv (bool b);
     void setAutoRec (bool b);
     void setThresh (double pct01);                  // 0.01..0.5
+    void setBpm (double bpm);                       // 0 = auto (la 1ère boucle pose la grille)
+    void setClick (bool on);
     void setCompMs (double ms);
     void setMasterGain01 (double g);                // déjà courbé côté UI (pow 1.5 * 1.1)
 
@@ -140,6 +142,7 @@ public:
                    float vu, pos; int recCount; double durS; };
         std::array<T, kNumTracks> tr;
         Grid grid; int sel; bool sync, mon, adv, arec; bool loopback;
+        double bpm; bool click; bool gridFromBpm;
         bool aec, aecCal; double aecMs;
         double thresh, compMs; float inVu, masterVu;
     };
@@ -196,6 +199,10 @@ private:
     int    sel = 0;
     bool   sync = true, monitor = false, autoAdv = false, autoRec = false;
     double thresh = 0.03, compMs = 0;
+    double bpm = 0;                     // tempo maître (0 = auto)
+    bool   clickOn = false;             // métronome
+    bool   gridFromBpm = false;         // la grille vient du BPM (pas d'une boucle)
+    void   poseGridFromBpmLocked();
     int    jobSeq = 0;
 
     double sr = 48000.0;
