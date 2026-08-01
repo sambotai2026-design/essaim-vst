@@ -37,6 +37,7 @@ public:
     essaim::LCXL   lcxl { engine };
 
 private:
+    static BusesProperties essaimBuses();   // membre : accès au struct protégé de JUCE
     void timerCallback() override { engine.uiTick(); }
     juce::AudioBuffer<float> stereoBuf;   // somme d'entrée / source de duplication
 
