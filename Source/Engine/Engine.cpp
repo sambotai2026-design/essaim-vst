@@ -44,7 +44,7 @@ void Engine::prepare (double newSr, int maxBlock)
         t.hpL.reset(); t.hpR.reset(); t.lpL.reset(); t.lpR.reset();
         t.trimG.reset (sr, 0.02);  t.trimG.setCurrentAndTargetValue (trimGain (t.fx[(int) Fx::Trim]));
         t.volG.reset  (sr, 0.015); t.volG.setCurrentAndTargetValue (faderGain (t.fadVal));
-        t.muteG.reset (sr, 0.008); t.muteG.setCurrentAndTargetValue (1.f);
+        t.muteG.reset (sr, 0.008); t.muteG.setCurrentAndTargetValue (t.st == St::Stop ? 0.f : 1.f);
         t.dSend.reset (sr, 0.02);  t.dSend.setCurrentAndTargetValue (sendDly (t.fx[(int) Fx::Dly]));
         t.rSend.reset (sr, 0.02);  t.rSend.setCurrentAndTargetValue (sendRvb (t.fx[(int) Fx::Rvb]));
         t.panV.reset  (sr, 0.02);  t.panV.setCurrentAndTargetValue (panOf (t.fx[(int) Fx::Pan]));
@@ -106,6 +106,7 @@ double Engine::grooveDelayTime() const
 {
     if (! grid.on) return 0.38;
     double t = grid.barS > 0 ? grid.barS : grid.lenS;
+    if (t <= 0) return 0.38;
     while (t > 0.75) t /= 2;
     while (t < 0.18) t *= 2;
     return t;
@@ -173,9 +174,9 @@ void Engine::cancelRec (Track& t)
 void Engine::armWatch (Track& t)
 {
     t.capCount = 0; t.closing = false;
-    t.gateOpen = false;    // exige un vrai silence avant d'écouter (anti queue de phrase)
-    t.bleedWarned = false;
     t.jobId = ++jobSeq;
+    t.gateOpen = false;    // bref silence requis (anti queue de phrase), ouverture forcée après 1,5 s
+    t.armedF = curF();
     t.watchMain = sync && grid.on;      // grille posée → le son déclenche un armement quantisé
     if (! t.watchMain)
         allocCapture (t, (juce::int64) (kMaxLoopSec * sr));
@@ -295,7 +296,7 @@ void Engine::setThresh (double v) { juce::ScopedLock l (lock); thresh = juce::jl
 void Engine::setCompMs (double v) { juce::ScopedLock l (lock); compMs = juce::jlimit (0.0, 300.0, v); }
 void Engine::setMasterGain01 (double g) { masterGain.store ((float) g); }
 
-// ---------- tick côté message : autorec, fins de capture, monitoring ----------
+// ---------- tick côté message : autorec, fins de capture, monitoring, repisse ----------
 void Engine::uiTick()
 {
     // fins de capture signalées par l'audio thread
@@ -305,7 +306,7 @@ void Engine::uiTick()
 
     juce::ScopedLock l (lock);
 
-    // départs watch signalés (worklet "started")
+    // départs watch signalés par l'audio thread
     for (int i = 0; i < kNumTracks; ++i)
     {
         const auto s = startedAt[(size_t) i].exchange (-1);
@@ -317,7 +318,7 @@ void Engine::uiTick()
         }
     }
 
-    // updateAutoWatch() du proto
+    // updateAutoWatch() du proto — déclencheur SIMPLE : un seuil, un anti-queue court
     for (int i = 0; i < kNumTracks; ++i)
     {
         auto& t = tr[(size_t) i];
@@ -328,23 +329,13 @@ void Engine::uiTick()
             if (! t.watchMain && sync && grid.on)            { cancelWatch (t); armWatch (t); continue; }
             if (t.watchMain)
             {
-                if (! t.gateOpen && curF() - lastAboveF.load() > (juce::int64) (0.12 * sr))
-                    t.gateOpen = true;
-                if (t.gateOpen && ! loopback.load() && inPeak.load() >= (float) thresh)
+                if (! t.gateOpen)
                 {
-                    // anti-repisse : si les boucles jouent, l'entrée doit DOMINER la sortie
-                    // (voix près du micro : oui ; boucle qui revient par le câblage/l'air : non).
-                    // Sans monitoring uniquement — avec MON la voix est déjà dans le master.
-                    const float mv = masterVuA.load();
-                    if (monitor || inPeak.load() >= mv * 0.5f)
-                        armRec (t);
-                    else if (! t.bleedWarned)
-                    {
-                        t.bleedWarned = true;
-                        pushToast (juce::String::fromUTF8 ("ÉCOUTE bloquée : l'entrée reçoit la sortie du looper (repisse). "
-                                   "Vérifie la paire d'entrée (CH3, pas MIX/REC) et le câblage, ou chante plus près / monte le seuil."), true);
-                    }
+                    const bool quiet   = curF() - lastAboveF.load() > (juce::int64) (0.08 * sr);
+                    const bool timeout = curF() - t.armedF          > (juce::int64) (1.5  * sr);
+                    if (quiet || timeout) t.gateOpen = true;
                 }
+                if (t.gateOpen && inPeak.load() >= (float) thresh) armRec (t);
             }
         }
         // garde-fou longueur max
@@ -368,7 +359,7 @@ void Engine::uiTick()
     // temps du delay suit la grille
     dlyTime.setTargetValue ((float) grooveDelayTime());
 
-    // ---- détection de repisse (l'entrée est une copie de la sortie ?) ----
+    // ---- détection de repisse : PUREMENT INDICATIVE, ne bloque rien ----
     lbIn[lbW] = inVuA.load(); lbOut[lbW] = masterVuA.load();
     lbW = (lbW + 1) % kLbWin; if (lbFill < kLbWin) ++lbFill;
     bool detected = false;
@@ -377,7 +368,7 @@ void Engine::uiTick()
         double mi = 0, mo = 0;
         for (int k = 0; k < kLbWin; ++k) { mi += lbIn[k]; mo += lbOut[k]; }
         mi /= kLbWin; mo /= kLbWin;
-        if (mo > 0.02 && mi > 0.15 * mo)      // sortie active, entrée non négligeable
+        if (mo > 0.02 && mi > 0.5 * mo)      // entrée quasi au niveau de la sortie
         {
             double sio = 0, sii = 0, soo = 0;
             for (int k = 0; k < kLbWin; ++k)
@@ -386,17 +377,17 @@ void Engine::uiTick()
                 sio += a * b; sii += a * a; soo += b * b;
             }
             const double denom = std::sqrt (sii * soo);
-            if (denom > 1e-9 && sio / denom > 0.8) detected = true;   // enveloppes corrélées
+            if (denom > 1e-9 && sio / denom > 0.9) detected = true;   // copie quasi certaine (câblage)
         }
     }
     lbHold = detected ? 90 : juce::jmax (0, lbHold - 1);   // ~1,5 s de maintien
     loopback.store (lbHold > 0);
-    if (lbHold > 0 && curF() - lastLbToastF > (juce::int64) (20.0 * sr))
+    if (lbHold > 0 && curF() - lastLbToastF > (juce::int64) (30.0 * sr))
     {
         lastLbToastF = curF();
-        pushToast (juce::String::fromUTF8 ("⚠ REPISSE : l'entrée du looper reçoit sa propre sortie. "
-                   "Débranche toute liaison booth/master → CH3 (l'entrée doit contenir UNIQUEMENT le micro via le préampli) "
-                   "et vérifie la paire d'entrée (CH3, pas MIX/REC). AUTOREC est verrouillé tant que ça dure."), true);
+        pushToast (juce::String::fromUTF8 ("⚠ L'entrée ressemble fort à la sortie (repisse/câblage). "
+                   "Seul le micro doit entrer sur CH3 (préampli), paire d'entrée = CH3, pas MIX/REC. "
+                   "Info seulement : rien n'est bloqué."), true);
     }
 }
 
@@ -522,7 +513,7 @@ std::array<Engine::LedView, kNumTracks> Engine::ledView()
     return out;
 }
 
-// ---------- sauvegarde ----------
+// ---------- sauvegarde (réglages) ----------
 juce::ValueTree Engine::toState() const
 {
     juce::ValueTree v ("ESSAIM");
@@ -562,6 +553,15 @@ void Engine::fromState (const juce::ValueTree& v)
         t.fadVal = (int) tv.getProperty ("fad", 102);
         for (int r = 0; r < 3; ++r) t.assign[(size_t) r] = fxFromKey (tv.getProperty ("a" + juce::String (r), "filter").toString());
         for (int f = 0; f < 6; ++f) t.fx[f] = (int) tv.getProperty ("f" + juce::String (f), fxDefault ((Fx) f));
+        // ré-application DSP
+        const auto ff = filterFreqs (t.fx[(int) Fx::Filter], sr);
+        t.tgtLp = (float) ff.lp; t.tgtHp = (float) ff.hp;
+        t.driveA = t.fx[(int) Fx::Drive] / 127.f;
+        t.dSend.setTargetValue (sendDly (t.fx[(int) Fx::Dly]));
+        t.rSend.setTargetValue (sendRvb (t.fx[(int) Fx::Rvb]));
+        t.panV.setTargetValue (panOf (t.fx[(int) Fx::Pan]));
+        t.trimG.setTargetValue (trimGain (t.fx[(int) Fx::Trim]));
+        t.volG.setTargetValue (faderGain (t.fadVal));
     }
 }
 
@@ -579,16 +579,15 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
     {
         if (t.st == St::Wait && ! t.watchMain && t.jobId > 0)
         {
-            if (loopback.load()) continue;   // repisse détectée : pas de déclenchement
             if (! t.gateOpen)
             {
-                if (b0 - lastAboveF.load() > (juce::int64) (0.12 * sr)) t.gateOpen = true;
-                else continue;   // encore du son (queue de la prise précédente) : on attend le silence
+                const bool quiet   = b0 - lastAboveF.load() > (juce::int64) (0.08 * sr);
+                const bool timeout = b0 - t.armedF          > (juce::int64) (1.5  * sr);
+                if (quiet || timeout) t.gateOpen = true;
+                else continue;   // queue de la prise précédente : on attend (1,5 s max)
             }
             int hit = -1;
-            const float mv = masterVuA.load();
-            const float th = monitor ? (float) thresh
-                                     : juce::jmax ((float) thresh, mv * 0.5f);   // anti-repisse
+            const float th = (float) thresh;
             for (int q = 0; q < n; ++q)
                 if (std::abs (inL[q]) >= th || std::abs (inR[q]) >= th) { hit = q; break; }
             if (hit >= 0)
@@ -604,9 +603,8 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                     t.buf.setSample (1, (int) t.capCount, ring1[(size_t) p]);
                     ++t.capCount;
                 }
-                // le job devient un enregistrement ouvert ; l'état passe REC côté message
                 t.watchMain = false;
-                t.startF = start;   // provisoire (le message thread ré-applique -comp)
+                t.startF = start;   // provisoire (le thread message ré-applique -comp)
                 t.stopF = 0;
                 startedAt[(size_t) (&t - tr.data())].store (start);
                 t.st = St::Rec;     // capture active dès maintenant
@@ -619,9 +617,6 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
         // capture active (Pending programmé ou Rec)
         if ((t.st == St::Pending || t.st == St::Rec) && t.jobId > 0)
         {
-            const auto js = t.capBase;
-            const auto je = t.stopF != 0 ? t.stopF + compF() + kXFadeFr : (juce::int64) 1 << 60;
-
             auto blendHead = [this] (Track& tt)
             {
                 // fondu enchaîné tête/queue : la fin capturée en trop (kXFadeFr frames)
@@ -638,6 +633,9 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                     br[j] = br[j] * w + br[(int) L + j] * u;
                 }
             };
+
+            const auto js = t.capBase;
+            const auto je = t.stopF != 0 ? t.stopF + compF() + kXFadeFr : (juce::int64) 1 << 60;
             if (je <= b0)
             {
                 // terminé avant ce bloc
@@ -699,7 +697,6 @@ void Engine::renderTracks (const float* inL, const float* inR, juce::AudioBuffer
             : 0;
         if (! playing && ! tapOn && ! recTail)
         {
-            // fait quand même avancer les smoothers pour rester cohérent
             t.trimG.skip (n); t.volG.skip (n); t.muteG.skip (n);
             t.dSend.skip (n); t.rSend.skip (n); t.panV.skip (n); t.inTap.skip (n);
             t.vu.store (t.vu.load() * 0.86f);
@@ -763,7 +760,7 @@ void Engine::renderTracks (const float* inL, const float* inR, juce::AudioBuffer
                 yl = xl * std::cos (x);
                 yr = xr + xl * std::sin (x);
             }
-            const float vg = t.volG.getNextValue() ;
+            const float vg = t.volG.getNextValue();
             const float mg = t.muteG.getNextValue();
             const float ol = yl * vg * mg, orr = yr * vg * mg;
             oL[q] += ol; oR[q] += orr;
@@ -838,16 +835,14 @@ void Engine::process (juce::AudioBuffer<float>& io)
         io.addFrom (1, 0, rvbBusBuf, 1, 0, n, 0.9f);
     }
 
-    // master gain + limiteur
+    // master gain + limiteur + makeup (Web Audio applique un makeup auto)
     io.applyGain (masterGain.load());
-    // Web Audio DynamicsCompressor applique un makeup automatique — approché ici
-    
     {
         juce::dsp::AudioBlock<float> mb (io);
         juce::dsp::ProcessContextReplacing<float> cx (mb);
         limiter.process (cx);
     }
-    io.applyGain (1.25f);   // makeup ≈ Web Audio (auto)
+    io.applyGain (1.25f);
     {
         float pk = 0.f;
         auto* oL = io.getReadPointer (0); auto* oR = io.getReadPointer (1);
@@ -857,10 +852,6 @@ void Engine::process (juce::AudioBuffer<float>& io)
 
     gf.store (b0 + n);
 }
-
-} // namespace essaim
-
-namespace essaim {
 
 // ---------- session complète (.essaim) : réglages + boucles ----------
 // Format v1 : "ESSAIMS1" | int32 taille XML | XML UTF-8 | par piste avec boucle :
@@ -934,9 +925,10 @@ bool Engine::loadSession (juce::InputStream& is)
         const auto frames = (juce::int64) tv.getProperty ("frames", 0);
         if (frames <= 0 || frames > (juce::int64) (kMaxLoopSec * 192000.0)) return false;
         if (is.readInt64() != frames) return false;
+        const int bytes = (int) (frames * (juce::int64) sizeof (float));
         bufs[(size_t) i].setSize (2, (int) frames);
-        if (is.read (bufs[(size_t) i].getWritePointer (0), (int) (frames * (juce::int64) sizeof (float))) != (int) (frames * (juce::int64) sizeof (float))) return false;
-        if (is.read (bufs[(size_t) i].getWritePointer (1), (int) (frames * (juce::int64) sizeof (float))) != (int) (frames * (juce::int64) sizeof (float))) return false;
+        if (is.read (bufs[(size_t) i].getWritePointer (0), bytes) != bytes) return false;
+        if (is.read (bufs[(size_t) i].getWritePointer (1), bytes) != bytes) return false;
         lens[(size_t) i] = frames;
     }
 
@@ -951,7 +943,6 @@ bool Engine::loadSession (juce::InputStream& is)
         }
         fromState (v);
         const auto A0 = curF() + kMarginFr;    // toutes les boucles re-phasées, têtes alignées
-        const double ratio = savedSr > 0 ? sr / savedSr : 1.0;   // durées gardées si sr diffère
         for (int i = 0; i < kNumTracks; ++i)
         {
             auto& t = tr[(size_t) i];
@@ -960,7 +951,7 @@ bool Engine::loadSession (juce::InputStream& is)
                 t.buf = std::move (bufs[(size_t) i]);
                 t.bufLen = lens[(size_t) i];
                 t.hasBuf = true;
-                t.durS = (double) t.bufLen / savedSr;
+                t.durS = savedSr > 0 ? (double) t.bufLen / savedSr : (double) t.bufLen / sr;
                 t.anchorF = A0;
                 t.st = St::Stop;                          // muettes, en phase — PLAY pour lancer
                 t.muteG.setCurrentAndTargetValue (0.f);
@@ -974,12 +965,10 @@ bool Engine::loadSession (juce::InputStream& is)
             }
             t.closing = false; t.jobId = -1; t.capCount = 0;
         }
-        const bool gOn = (bool) v.getProperty ("gridOn", false);
-        grid.on   = gOn;
+        grid.on   = (bool) v.getProperty ("gridOn", false);
         grid.lenS = (double) v.getProperty ("gridLen", 0.0);
         grid.barS = (double) v.getProperty ("gridBar", 0.0);
         grid.t0S  = (double) A0 / sr;
-        juce::ignoreUnused (ratio);
         dlyTime.setTargetValue ((float) grooveDelayTime());
     }
 
