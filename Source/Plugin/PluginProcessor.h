@@ -38,6 +38,7 @@ public:
 
 private:
     void timerCallback() override { engine.uiTick(); }
+    juce::AudioBuffer<float> stereoBuf;   // somme d'entrée / source de duplication
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EssaimProcessor)
 };
