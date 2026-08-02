@@ -299,7 +299,8 @@ kbd{ font-family:"JetBrains Mono",monospace; font-size:10px; background:var(--ce
   </div>
 
   <div class="hgroup">
-    <button class="tgl" id="stopAll" title="Espace">STOP ALL</button>
+    <button class="tgl" id="playAll" title="Espace : play/stop général">PLAY ALL</button>
+    <button class="tgl" id="stopAll">STOP ALL</button>
     <button class="tgl danger" id="clearAll" title="Double-clic pour tout effacer">CLEAR ALL ×2</button>
   </div>
 
@@ -663,6 +664,7 @@ window.__push = function(s){
     t.bars = d.bars;
   }
 
+  window.__anyPlaying = s.tr.some(t => t.st === "PLAY");
   $("#syncBtn").classList.toggle("on", !!s.sync);
   $("#monBtn").classList.toggle("on", !!s.mon);
   $("#autoBtn").classList.toggle("on", !!s.adv);
@@ -756,6 +758,8 @@ function initTopbar(){
   $("#thresh").addEventListener("change", () => bridge.emit({ fn:"thresh", v: clamp(+$("#thresh").value || 3, 1, 50) }));
   $("#comp").addEventListener("change",   () => bridge.emit({ fn:"comp",   v: clamp(+$("#comp").value || 0, 0, 300) }));
   $("#stopAll").addEventListener("click", () => bridge.emit({ fn:"stopAll" }));
+  const pAll = $("#playAll");
+  if(pAll) pAll.addEventListener("click", () => bridge.emit({ fn:"playAll" }));
   $("#clearAll").addEventListener("dblclick", () => bridge.emit({ fn:"clearAll" }));
 
   // master
@@ -815,7 +819,11 @@ function initTopbar(){
       bridge.emit({ fn:"stepBars", v: e.code === "ArrowUp" ? 1 : -1 });
       return;
     }
-    if(e.code === "Space"){ e.preventDefault(); bridge.emit({ fn:"stopAll" }); return; }
+    if(e.code === "Space"){
+      e.preventDefault();
+      bridge.emit({ fn: window.__anyPlaying ? "stopAll" : "playAll" });
+      return;
+    }
     const m = /^Digit([1-8])$/.exec(e.code);
     if(m){
       e.preventDefault();

@@ -258,6 +258,13 @@ void Engine::stopAll()
         if (t.st == St::Play) { t.muteG.setTargetValue (0.f); t.st = St::Stop; }
 }
 
+void Engine::playAll()
+{
+    juce::ScopedLock l (lock);
+    for (auto& t : tr)
+        if (t.st == St::Stop && t.hasBuf) { t.muteG.setTargetValue (1.f); t.st = St::Play; }
+}
+
 void Engine::setFader (int i, int v) { juce::ScopedLock l (lock); auto& t = tr[(size_t) i]; t.fadVal = juce::jlimit (0, 127, v); t.volG.setTargetValue (faderGain (t.fadVal)); }
 
 void Engine::setFxRow (int i, int row, int v)
@@ -402,12 +409,8 @@ void Engine::uiTick()
         for (int i = 0; i < kNumTracks; ++i)
         {
             const auto s2 = startedAt[(size_t) i].exchange (-1);
-            if (s2 >= 0 && (tr[(size_t) i].st == St::Wait || tr[(size_t) i].st == St::Rec))
-            {
-                auto& t = tr[(size_t) i];
-                t.startF = juce::jmax ((juce::int64) 0, s2 - compF());
-                if (t.st == St::Wait) t.st = St::Rec;
-            }
+            if (s2 >= 0 && tr[(size_t) i].st == St::Wait)
+                tr[(size_t) i].st = St::Rec;   // startF/capBase d\u00e9j\u00e0 pos\u00e9s par l'audio
         }
 
         // updateAutoWatch() — déclencheur SIMPLE : un seuil, un anti-queue court
@@ -831,46 +834,69 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                 if (std::abs (inL[q]) >= th || std::abs (inR[q]) >= th) { hit = q; break; }
             if (hit >= 0)
             {
-                const auto start = juce::jmax ((juce::int64) 0, b0 + hit - kPreRollFr);
-                t.capBase = start; t.capCount = 0;
-                // pré-roll depuis le ring
-                const auto cnt = (int) (b0 - start);
-                for (int q = 0; q < cnt && t.capCount < t.buf.getNumSamples(); ++q)
-                {
-                    const int p = (int) (((juce::int64) ringW + (start + q - b1) + 8LL * kRingLen) % kRingLen);
-                    t.buf.setSample (0, (int) t.capCount, ring0[(size_t) p]);
-                    t.buf.setSample (1, (int) t.capCount, ring1[(size_t) p]);
-                    ++t.capCount;
-                }
+                const auto onset = juce::jmax ((juce::int64) 0, b0 + hit - kPreRollFr);
                 t.watchMain = false;
-                t.startF = start - compF();
-                t.snapCorr = 0;
+                t.snapCorr  = 0;
+                t.onsetTake = (sync && grid.on);
+                juce::int64 capFrom = onset;               // d\u00e9but de capture (frames flux)
+
                 if (sync && grid.on)
                 {
-                    // recalage de pose : l'attaque (frame musicale) est aimant\u00e9e sur le
-                    // temps (quart de mesure) le plus proche — correction max \u00b1 demi-temps.
-                    // Z\u00e9ro traitement du son : seule l'horloge de pose bouge.
                     const auto barFq  = juce::jmax ((juce::int64) 4,
                                           (juce::int64) juce::roundToInt (grid.barS * sr));
                     const auto beatF  = juce::jmax ((juce::int64) 1, barFq / 4);
                     const auto t0F    = (juce::int64) juce::roundToInt (grid.t0S * sr);
-                    const auto attack = t.startF + (juce::int64) kPreRollFr;
+                    const auto attack = (b0 + hit) - compF();          // frame musicale de l'attaque
                     const auto rel    = attack - t0F;
-                    const auto snapped= t0F + ((rel + beatF / 2) / beatF) * beatF;
-                    t.snapCorr = snapped - attack;
+                    const auto bStar  = t0F + juce::roundToIntAccurate ((double) rel / (double) barFq) * barFq;
+
+                    if (attack >= bStar)
+                    {
+                        // EN RETARD (jusqu'\u00e0 une demi-mesure) : la r\u00e9gion est cal\u00e9e
+                        // PILE sur la mesure vis\u00e9e — le moteur remonte le ring pour
+                        // capturer depuis la barre, ton retard devient ton groove,
+                        // les fronti\u00e8res de boucle sont parfaites.
+                        t.startF  = bStar;
+                        capFrom   = bStar + compF();
+                        t.snapCorr = 0;
+                    }
+                    else
+                    {
+                        // EN AVANCE (lev\u00e9e) : capture depuis ton attaque, pose
+                        // aimant\u00e9e sur le temps le plus proche (comportement valid\u00e9).
+                        t.startF = onset - compF();
+                        capFrom  = onset;
+                        const auto snapped = t0F + ((attack - t0F + beatF / 2) / beatF) * beatF;
+                        t.snapCorr = snapped - (t.startF + (juce::int64) kPreRollFr);
+                    }
+
+                    if (t.bars > 0)
+                        t.stopF = t.startF + (juce::int64) t.bars * barFq;   // longueur = pile N mesures
+                    else
+                        t.stopF = 0;                                          // MAN : fermeture en mesures enti\u00e8res
                 }
-                if (sync && grid.on && t.bars > 0)
+                else
                 {
-                    // prise calée sur TON attaque : longueur forcée à N mesures exactes,
-                    // rebouclage en phase avec la grille (L multiple de la mesure)
-                    const auto barF = juce::jmax ((juce::int64) 1,
-                                                  (juce::int64) juce::roundToInt (grid.barS * sr));
-                    t.stopF = t.startF + (juce::int64) t.bars * barF;
-                    t.onsetTake = true;
+                    t.startF = onset - compF();
+                    t.stopF  = 0;
                 }
-                else { t.stopF = 0; t.onsetTake = (sync && grid.on); }
-                startedAt[(size_t) (&t - tr.data())].store (start);
-                t.st = St::Rec;     // capture active dès maintenant
+
+                // remplissage depuis le ring : [capFrom, b0) — pr\u00e9-roll et/ou remont\u00e9e \u00e0 la mesure
+                t.capBase = juce::jmax ((juce::int64) 0, capFrom);
+                t.capCount = 0;
+                const auto cnt = (juce::int64) (b0 - t.capBase);
+                if (cnt > 0 && cnt < (juce::int64) kRingLen)
+                {
+                    for (juce::int64 q = 0; q < cnt && t.capCount < t.buf.getNumSamples(); ++q)
+                    {
+                        const int pp = (int) (((juce::int64) ringW + (t.capBase + q - b1) + 32LL * kRingLen) % kRingLen);
+                        t.buf.setSample (0, (int) t.capCount, ring0[(size_t) pp]);
+                        t.buf.setSample (1, (int) t.capCount, ring1[(size_t) pp]);
+                        ++t.capCount;
+                    }
+                }
+                startedAt[(size_t) (&t - tr.data())].store (t.capBase);
+                t.st = St::Rec;     // capture active d\u00e8s maintenant
                 // pas de continue : la capture ci-dessous prend la suite du bloc courant
             }
             else

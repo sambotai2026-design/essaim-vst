@@ -14,7 +14,7 @@ constexpr int    kNumTracks   = 8;
 constexpr double kMaxLoopSec  = 120.0;
 constexpr int    kMarginFr    = 1536;   // avance d'armement (frames)
 constexpr int    kPreRollFr   = 384;    // pré-roll auto-rec (~8 ms)
-constexpr int    kRingLen     = 32768;  // ring d'entrée (pré-roll + calibration anti-retour)
+constexpr int    kRingLen     = 131072; // ring d'entrée (~2,7 s : pré-roll, calibration, rattrapage à la mesure)
 constexpr int    kOutRing     = 1 << 18; // ring de sortie (référence anti-retour, ~5 s)
 constexpr int    kDecShift    = 4;       // décimation ÷16 pour la recherche de délai
 constexpr int    kWavePoints  = 256;    // paires min/max envoyées à l'UI
@@ -113,6 +113,7 @@ public:
     void clearTrack (int i);
     void clearAll();
     void stopAll();
+    void playAll();
     void setFader (int i, int v0to127);
     void setFxRow (int i, int row, int v0to127);
     void resetFxRow (int i, int row);

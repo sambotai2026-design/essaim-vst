@@ -65,6 +65,7 @@ void EssaimEditor::handleUiEvent (const var& v)
     else if (fn == "clear")    e.clearTrack (i);
     else if (fn == "clearAll") e.clearAll();
     else if (fn == "stopAll")  e.stopAll();
+    else if (fn == "playAll")  e.playAll();
     else if (fn == "fader")    { e.setFader (i, val); proc.lcxl.dropTakeoverFader (i); }
     else if (fn == "fx")       { e.setFxRow (i, r, val); proc.lcxl.dropTakeoverKnob (i, r); }
     else if (fn == "fxDbl")    { e.resetFxRow (i, r); proc.lcxl.dropTakeoverKnob (i, r); }
