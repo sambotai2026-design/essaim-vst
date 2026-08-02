@@ -519,56 +519,83 @@ void Engine::aecEstimate()
         if (r > bestR) bestR = r;
     }
     // signaux p\u00e9riodiques (m\u00e9tronome, boucles) : des alias apparaissent \u00e0
-    // vraiD\u00e9lai + k*p\u00e9riode. Le VRAI trajet est toujours le PREMIER pic fort.
-    int bestLag = -1;
-    for (int lag = 2; lag < maxLag; ++lag)
-        if (score[(size_t) lag] >= 0.85 * bestR) { bestLag = lag; break; }
-    if (bestLag < 0 || bestR < 0.3)
+    // vraiD\u00e9lai + k*p\u00e9riode. On collecte les premiers pics forts, puis on ne
+    // garde que celui qui ANNULE r\u00e9ellement (test du r\u00e9sidu) — un alias corr\u00e8le
+    // mais n'annule rien, il est donc rejet\u00e9.
+    std::vector<int> cands;
+    for (int lag = 2; lag < maxLag && (int) cands.size() < 4; ++lag)
+        if (score[(size_t) lag] >= 0.85 * bestR)
+        {
+            if (cands.empty() || lag - cands.back() > 8) cands.push_back (lag);
+            else if (score[(size_t) lag] > score[(size_t) cands.back()]) cands.back() = lag;
+        }
+    if (cands.empty() || bestR < 0.3)
     {
         pushToast (juce::String::fromUTF8 ("ANTI-RETOUR : calibration impossible pour l'instant (signal trop faible)."), true);
         return;
     }
 
-    // affinage pleine r\u00e9solution sur le ring d'entr\u00e9e (ring0/1) vs outRing
     juce::int64 bestD = -1; double bestC = 0;
     {
         juce::ScopedLock l (lock);
         const int N = 4096;
         const auto endF = nowF - 64;
-        const auto d0 = (juce::int64) bestLag * 16;
-        for (juce::int64 d = juce::jmax ((juce::int64) 32, d0 - 48); d <= d0 + 48; ++d)
+        for (int cLag : cands)
         {
-            double dot = 0, si = 1e-12, so = 1e-12;
-            for (int i = 0; i < N; i += 2)
+            // affinage pleine r\u00e9solution autour de ce candidat
+            juce::int64 dBest = -1; double cBest = 0;
+            const auto d0 = (juce::int64) cLag * 16;
+            for (juce::int64 d = juce::jmax ((juce::int64) 32, d0 - 48); d <= d0 + 48; ++d)
             {
-                const auto f = endF - i;
-                const int  ri = (int) (((juce::int64) ringW + (f - nowF) + 16LL * kRingLen) % kRingLen);
-                const auto oi = (size_t) ((juce::uint64) (f - d) & (juce::uint64) (kOutRing - 1));
-                const double a = (ring0[(size_t) ri] + ring1[(size_t) ri]) * 0.5;
-                const double b = (outRingL[oi] + outRingR[oi]) * 0.5;
-                dot += a * b; si += a * a; so += b * b;
+                double dot = 0, si = 1e-12, so = 1e-12;
+                for (int i = 0; i < N; i += 2)
+                {
+                    const auto f = endF - i;
+                    const int  ri = (int) (((juce::int64) ringW + (f - nowF) + 16LL * kRingLen) % kRingLen);
+                    const auto oi = (size_t) ((juce::uint64) (f - d) & (juce::uint64) (kOutRing - 1));
+                    const double a = (ring0[(size_t) ri] + ring1[(size_t) ri]) * 0.5;
+                    const double b = (outRingL[oi] + outRingR[oi]) * 0.5;
+                    dot += a * b; si += a * a; so += b * b;
+                }
+                const double c = dot / std::sqrt (si * so);
+                if (c > cBest) { cBest = c; dBest = d; }
             }
-            const double c = dot / std::sqrt (si * so);
-            if (c > bestC) { bestC = c; bestD = d; }
-        }
-        if (bestD > 0 && bestC > 0.4)
-        {
-            // gains initiaux par moindres carr\u00e9s
-            double eL = 0, eR = 0, oo = 1e-12;
+            if (dBest <= 0 || cBest < 0.4) continue;
+
+            // gains par moindres carr\u00e9s + TEST DU R\u00c9SIDU sur ce candidat
+            double eL = 0, eR = 0, oo = 1e-12, ein = 1e-12;
             const int N2 = 8192;
             for (int i = 0; i < N2; i += 2)
             {
                 const auto f = nowF - 64 - i;
                 const int  ri = (int) (((juce::int64) ringW + (f - nowF) + 16LL * kRingLen) % kRingLen);
-                const auto oi = (size_t) ((juce::uint64) (f - bestD) & (juce::uint64) (kOutRing - 1));
+                const auto oi = (size_t) ((juce::uint64) (f - dBest) & (juce::uint64) (kOutRing - 1));
                 eL += (double) ring0[(size_t) ri] * outRingL[oi];
                 eR += (double) ring1[(size_t) ri] * outRingR[oi];
                 oo += (double) outRingL[oi] * outRingL[oi] + (double) outRingR[oi] * outRingR[oi];
+                ein += (double) ring0[(size_t) ri] * ring0[(size_t) ri]
+                     + (double) ring1[(size_t) ri] * ring1[(size_t) ri];
             }
-            aecGL.store ((float) juce::jlimit (0.0, 4.0, 2.0 * eL / oo));
-            aecGR.store ((float) juce::jlimit (0.0, 4.0, 2.0 * eR / oo));
-            aecD.store (bestD);
-            aecQ.store ((float) bestC);
+            const double gl = juce::jlimit (0.0, 4.0, 2.0 * eL / oo);
+            const double gr = juce::jlimit (0.0, 4.0, 2.0 * eR / oo);
+            double eres = 1e-12;
+            for (int i = 0; i < N2; i += 2)
+            {
+                const auto f = nowF - 64 - i;
+                const int  ri = (int) (((juce::int64) ringW + (f - nowF) + 16LL * kRingLen) % kRingLen);
+                const auto oi = (size_t) ((juce::uint64) (f - dBest) & (juce::uint64) (kOutRing - 1));
+                const double rl = (double) ring0[(size_t) ri] - gl * outRingL[oi];
+                const double rr = (double) ring1[(size_t) ri] - gr * outRingR[oi];
+                eres += rl * rl + rr * rr;
+            }
+            if (eres / ein > 0.6) continue;   // n'annule pas assez : alias -> candidat suivant
+
+            aecGL.store ((float) gl);
+            aecGR.store ((float) gr);
+            aecD.store (dBest);
+            aecQ.store ((float) cBest);
+            bestD = dBest; bestC = cBest;
+            break;
         }
     }
     if (bestD > 0 && bestC > 0.4)
@@ -781,6 +808,8 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
     {
         if (t.st == St::Wait && t.jobId > 0)
         {
+            if (aecOn.load() && aecD.load() < 0 && masterVuA.load() > 0.03f)
+                continue;   // sortie active mais anti-retour pas encore calibr\u00e9 : on attend (~2 s max)
             if (! t.gateOpen)
             {
                 const bool quiet   = b0 - lastAboveF.load() > (juce::int64) (0.08 * sr);
@@ -1033,10 +1062,14 @@ void Engine::process (juce::AudioBuffer<float>& io)
                 eiL += (double) wl[q] * oL2;
                 eiR += (double) wr[q] * oR2;
             }
-            if (eo > 1e-4)
+            // pas d'adaptation quand la sortie est faible ; pas minuscule et borné :
+            // la voix par-dessus les boucles ne peut plus faire dériver le gain
+            if (eo > (double) n * 2e-3)
             {
-                aecGL.store (juce::jlimit (0.f, 4.f, gL0 + (float) (1.2 * eiL / eo)));
-                aecGR.store (juce::jlimit (0.f, 4.f, gR0 + (float) (1.2 * eiR / eo)));
+                const float dl = (float) juce::jlimit (-0.003, 0.003, 0.08 * eiL / eo);
+                const float dr = (float) juce::jlimit (-0.003, 0.003, 0.08 * eiR / eo);
+                aecGL.store (juce::jlimit (0.f, 4.f, gL0 + dl));
+                aecGR.store (juce::jlimit (0.f, 4.f, gR0 + dr));
             }
         }
     }
