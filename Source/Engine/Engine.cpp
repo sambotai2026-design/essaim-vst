@@ -133,6 +133,7 @@ void Engine::armRec (Track& t)
 {
     t.recCount = 0; t.capCount = 0; t.closing = false;
     t.onsetTake = false;
+    t.snapCorr = 0;
     t.jobId = ++jobSeq;
     if (sync && grid.on)
     {
@@ -618,7 +619,7 @@ void Engine::finishRec (int idx)
         t.bufLen = juce::jmin (frames, (juce::int64) t.buf.getNumSamples());
         t.hasBuf = true;
         t.durS   = (double) t.bufLen / sr;
-        t.anchorF = t.stopF;                 // startSource(stopF/sr)
+        t.anchorF = t.stopF + t.snapCorr;    // pose recal\u00e9e sur le temps (snap sans warp)
         t.jobId = -1; t.closing = false;
 
         // signal quasi nul ?
@@ -651,6 +652,13 @@ void Engine::finishRec (int idx)
         wave = waveOfLocked (t);
     }
 
+    {
+        juce::int64 sc = 0;
+        { juce::ScopedLock l (lock); sc = tr[(size_t) idx].snapCorr; }
+        if (std::abs (sc) > (juce::int64) (0.001 * sr))
+            pushToast (juce::String::fromUTF8 ("Prise recal\u00e9e sur le temps : ")
+                       + (sc > 0 ? "+" : "") + juce::String (sc * 1000.0 / sr, 0) + " ms.");
+    }
     if (toastMsg.isNotEmpty()) pushToast (toastMsg, warn);
     if (posedGrid)             pushToast (gridMsg);
     UiEvent e; e.type = UiEvent::Wave; e.track = idx; e.wave = std::move (wave);
@@ -836,6 +844,21 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                 }
                 t.watchMain = false;
                 t.startF = start - compF();
+                t.snapCorr = 0;
+                if (sync && grid.on)
+                {
+                    // recalage de pose : l'attaque (frame musicale) est aimant\u00e9e sur le
+                    // temps (quart de mesure) le plus proche — correction max \u00b1 demi-temps.
+                    // Z\u00e9ro traitement du son : seule l'horloge de pose bouge.
+                    const auto barFq  = juce::jmax ((juce::int64) 4,
+                                          (juce::int64) juce::roundToInt (grid.barS * sr));
+                    const auto beatF  = juce::jmax ((juce::int64) 1, barFq / 4);
+                    const auto t0F    = (juce::int64) juce::roundToInt (grid.t0S * sr);
+                    const auto attack = t.startF + (juce::int64) kPreRollFr;
+                    const auto rel    = attack - t0F;
+                    const auto snapped= t0F + ((rel + beatF / 2) / beatF) * beatF;
+                    t.snapCorr = snapped - attack;
+                }
                 if (sync && grid.on && t.bars > 0)
                 {
                     // prise calée sur TON attaque : longueur forcée à N mesures exactes,
@@ -968,9 +991,9 @@ void Engine::renderTracks (const float* inL, const float* inR, juce::AudioBuffer
             else if (recTail)
             {
                 const auto gfq = now0 + q;
-                if (gfq >= t.stopF)
+                if (gfq >= t.stopF + t.snapCorr)
                 {
-                    const auto idx = (gfq - t.stopF) % tailLen;
+                    const auto idx = (gfq - (t.stopF + t.snapCorr)) % tailLen;
                     if (idx < t.capCount)
                     {
                         xl = t.buf.getSample (0, (int) idx);
