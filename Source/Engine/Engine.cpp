@@ -134,6 +134,7 @@ void Engine::armRec (Track& t)
     t.recCount = 0; t.capCount = 0; t.closing = false;
     t.onsetTake = false;
     t.snapCorr = 0;
+    t.loopOff = 0; t.attackF = 0;
     t.jobId = ++jobSeq;
     if (sync && grid.on)
     {
@@ -230,6 +231,7 @@ void Engine::clearTrack (int i)
     if (t.st == St::Wait)                        cancelWatch (t);
     if (t.st == St::Rec || t.st == St::Pending)  cancelRec (t);
     t.hasBuf = false; t.bufLen = 0; t.durS = 0; t.closing = false;
+    t.loopOff = 0;
     t.st = St::Empty;
     t.muteG.setTargetValue (1.f);
     t.pos.store (0.f);
@@ -261,8 +263,20 @@ void Engine::stopAll()
 void Engine::playAll()
 {
     juce::ScopedLock l (lock);
+    // vrai départ : toutes les boucles repartent DE ZÉRO, ensemble,
+    // et la grille (donc le CLICK et les prochaines prises) se recale dessus.
+    const auto A0 = curF() + kMarginFr;
+    bool any = false;
     for (auto& t : tr)
-        if (t.st == St::Stop && t.hasBuf) { t.muteG.setTargetValue (1.f); t.st = St::Play; }
+        if (t.hasBuf && (t.st == St::Stop || t.st == St::Play))
+        {
+            t.anchorF = A0;
+            t.muteG.setTargetValue (1.f);
+            t.st = St::Play;
+            any = true;
+        }
+    if (any && grid.on)
+        grid.t0S = (double) A0 / sr;
 }
 
 void Engine::setFader (int i, int v) { juce::ScopedLock l (lock); auto& t = tr[(size_t) i]; t.fadVal = juce::jlimit (0, 127, v); t.volG.setTargetValue (faderGain (t.fadVal)); }
@@ -618,8 +632,8 @@ void Engine::finishRec (int idx)
     {
         juce::ScopedLock l (lock);
         auto& t = tr[(size_t) idx];
-        const auto frames = juce::jmax ((juce::int64) 1, t.stopF + compF() - t.capBase);
-        t.bufLen = juce::jmin (frames, (juce::int64) t.buf.getNumSamples());
+        const auto frames = juce::jmax ((juce::int64) 1, t.stopF + compF() - t.capBase - t.loopOff);
+        t.bufLen = juce::jmin (frames, (juce::int64) t.buf.getNumSamples() - t.loopOff);
         t.hasBuf = true;
         t.durS   = (double) t.bufLen / sr;
         t.anchorF = t.stopF + t.snapCorr;    // pose recal\u00e9e sur le temps (snap sans warp)
@@ -627,7 +641,7 @@ void Engine::finishRec (int idx)
 
         // signal quasi nul ?
         float pk = 0.f;
-        const auto* L = t.buf.getReadPointer (0);
+        const auto* L = t.buf.getReadPointer (0) + t.loopOff;
         for (juce::int64 s = 0; s < t.bufLen; s += 97) pk = juce::jmax (pk, std::abs (L[(int) s]));
         if (pk < 0.0005f) { toastMsg = "Piste " + juce::String (idx + 1)
                             + juce::String::fromUTF8 (" : signal très faible — vérifie l'entrée / le gain."); warn = true; }
@@ -656,11 +670,18 @@ void Engine::finishRec (int idx)
     }
 
     {
-        juce::int64 sc = 0;
-        { juce::ScopedLock l (lock); sc = tr[(size_t) idx].snapCorr; }
-        if (std::abs (sc) > (juce::int64) (0.001 * sr))
-            pushToast (juce::String::fromUTF8 ("Prise recal\u00e9e sur le temps : ")
-                       + (sc > 0 ? "+" : "") + juce::String (sc * 1000.0 / sr, 0) + " ms.");
+        juce::int64 off = 0; bool onset = false;
+        { juce::ScopedLock l (lock); off = tr[(size_t) idx].attackF - tr[(size_t) idx].startF;
+          onset = tr[(size_t) idx].onsetTake; }
+        if (onset && std::abs (off) > (juce::int64) (0.002 * sr))
+        {
+            if (off > 0)
+                pushToast (juce::String::fromUTF8 ("Rattrap\u00e9e sur la mesure : +")
+                           + juce::String (off * 1000.0 / sr, 0) + " ms (ton retard = ton groove).");
+            else
+                pushToast (juce::String::fromUTF8 ("Lev\u00e9e gard\u00e9e hors boucle (")
+                           + juce::String (off * 1000.0 / sr, 0) + " ms).");
+        }
     }
     if (toastMsg.isNotEmpty()) pushToast (toastMsg, warn);
     if (posedGrid)             pushToast (gridMsg);
@@ -672,8 +693,8 @@ std::vector<float> Engine::waveOfLocked (Track& t)
 {
     std::vector<float> wave ((size_t) kWavePoints * 2, 0.f);
     if (! t.hasBuf || t.bufLen <= 0) return wave;
-    const auto* L  = t.buf.getReadPointer (0);
-    const auto* Rp = t.buf.getReadPointer (1);
+    const auto* L  = t.buf.getReadPointer (0) + t.loopOff;
+    const auto* Rp = t.buf.getReadPointer (1) + t.loopOff;
     const auto step = juce::jmax ((juce::int64) 1, t.bufLen / kWavePoints);
     for (int x = 0; x < kWavePoints; ++x)
     {
@@ -837,43 +858,33 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                 const auto onset = juce::jmax ((juce::int64) 0, b0 + hit - kPreRollFr);
                 t.watchMain = false;
                 t.snapCorr  = 0;
+                t.loopOff   = 0;
                 t.onsetTake = (sync && grid.on);
-                juce::int64 capFrom = onset;               // d\u00e9but de capture (frames flux)
+                juce::int64 capFrom = onset;
 
                 if (sync && grid.on)
                 {
-                    const auto barFq  = juce::jmax ((juce::int64) 4,
-                                          (juce::int64) juce::roundToInt (grid.barS * sr));
-                    const auto beatF  = juce::jmax ((juce::int64) 1, barFq / 4);
-                    const auto t0F    = (juce::int64) juce::roundToInt (grid.t0S * sr);
-                    const auto attack = (b0 + hit) - compF();          // frame musicale de l'attaque
-                    const auto rel    = attack - t0F;
-                    const auto bStar  = t0F + juce::roundToIntAccurate ((double) rel / (double) barFq) * barFq;
+                    // R\u00c8GLE UNIQUE : la boucle = les mesures vis\u00e9es, c'est-\u00e0-dire la
+                    // barre la plus proche de l'attaque + N mesures. En retard, le
+                    // moteur remonte le ring jusqu'\u00e0 la barre. En avance, la lev\u00e9e
+                    // est capt\u00e9e mais vit HORS de la boucle (entendue en live).
+                    const auto barFq = juce::jmax ((juce::int64) 4,
+                                         (juce::int64) juce::roundToInt (grid.barS * sr));
+                    const auto t0F   = (juce::int64) juce::roundToInt (grid.t0S * sr);
+                    const auto attack= (b0 + hit) - compF();
+                    const auto rel   = attack - t0F;
+                    const auto bStar = t0F + (juce::int64) juce::roundToIntAccurate ((double) rel / (double) barFq) * barFq;
 
+                    t.startF  = bStar;
+                    t.attackF = attack;
                     if (attack >= bStar)
-                    {
-                        // EN RETARD (jusqu'\u00e0 une demi-mesure) : la r\u00e9gion est cal\u00e9e
-                        // PILE sur la mesure vis\u00e9e — le moteur remonte le ring pour
-                        // capturer depuis la barre, ton retard devient ton groove,
-                        // les fronti\u00e8res de boucle sont parfaites.
-                        t.startF  = bStar;
-                        capFrom   = bStar + compF();
-                        t.snapCorr = 0;
-                    }
+                        capFrom = bStar + compF();                 // retard : remont\u00e9e \u00e0 la barre
                     else
                     {
-                        // EN AVANCE (lev\u00e9e) : capture depuis ton attaque, pose
-                        // aimant\u00e9e sur le temps le plus proche (comportement valid\u00e9).
-                        t.startF = onset - compF();
-                        capFrom  = onset;
-                        const auto snapped = t0F + ((attack - t0F + beatF / 2) / beatF) * beatF;
-                        t.snapCorr = snapped - (t.startF + (juce::int64) kPreRollFr);
+                        capFrom  = onset;                          // avance : lev\u00e9e capt\u00e9e avant la barre
+                        t.loopOff = (bStar + compF()) - onset;     // ... hors de la boucle
                     }
-
-                    if (t.bars > 0)
-                        t.stopF = t.startF + (juce::int64) t.bars * barFq;   // longueur = pile N mesures
-                    else
-                        t.stopF = 0;                                          // MAN : fermeture en mesures enti\u00e8res
+                    t.stopF = t.bars > 0 ? t.startF + (juce::int64) t.bars * barFq : 0;
                 }
                 else
                 {
@@ -881,7 +892,7 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                     t.stopF  = 0;
                 }
 
-                // remplissage depuis le ring : [capFrom, b0) — pr\u00e9-roll et/ou remont\u00e9e \u00e0 la mesure
+                // remplissage depuis le ring : [capFrom, b0)
                 t.capBase = juce::jmax ((juce::int64) 0, capFrom);
                 t.capCount = 0;
                 const auto cnt = (juce::int64) (b0 - t.capBase);
@@ -896,7 +907,7 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
                     }
                 }
                 startedAt[(size_t) (&t - tr.data())].store (t.capBase);
-                t.st = St::Rec;     // capture active d\u00e8s maintenant
+                t.st = St::Rec;
                 // pas de continue : la capture ci-dessous prend la suite du bloc courant
             }
             else
@@ -913,16 +924,17 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
             {
                 // fondu enchaîné tête/queue : la fin capturée en trop (kXFadeFr frames)
                 // est fondue dans le début — plus de clic au point de bouclage.
-                const auto L = tt.stopF + compF() - tt.capBase;
+                const auto O = tt.loopOff;
+                const auto L = tt.stopF + compF() - tt.capBase - O;
                 if (L <= kXFadeFr) return;
                 auto* bl = tt.buf.getWritePointer (0);
                 auto* br = tt.buf.getWritePointer (1);
-                for (int j = 0; j < kXFadeFr && L + j < tt.capCount; ++j)
+                for (int j = 0; j < kXFadeFr && O + L + j < tt.capCount; ++j)
                 {
                     const float w = std::sin (((float) (j + 1) / (kXFadeFr + 1)) * juce::MathConstants<float>::halfPi);
                     const float u = std::cos (((float) (j + 1) / (kXFadeFr + 1)) * juce::MathConstants<float>::halfPi);
-                    bl[j] = bl[j] * w + bl[(int) L + j] * u;
-                    br[j] = br[j] * w + br[(int) L + j] * u;
+                    bl[(int) O + j] = bl[(int) O + j] * w + bl[(int) (O + L) + j] * u;
+                    br[(int) O + j] = br[(int) O + j] * w + br[(int) (O + L) + j] * u;
                 }
             };
 
@@ -1000,8 +1012,8 @@ void Engine::renderTracks (const float* inL, const float* inR, juce::AudioBuffer
         const bool doDrive = t.driveA > 0.001f;
         float pk = 0.f;
 
-        const auto* bL = t.hasBuf ? t.buf.getReadPointer (0) : nullptr;
-        const auto* bR = t.hasBuf ? t.buf.getReadPointer (1) : nullptr;
+        const auto* bL = t.hasBuf ? t.buf.getReadPointer (0) + t.loopOff : nullptr;
+        const auto* bR = t.hasBuf ? t.buf.getReadPointer (1) + t.loopOff : nullptr;
         juce::int64 rp = 0;
         if (playing)
             rp = ((now0 - t.anchorF) % t.bufLen + t.bufLen) % t.bufLen;
@@ -1020,10 +1032,10 @@ void Engine::renderTracks (const float* inL, const float* inR, juce::AudioBuffer
                 if (gfq >= t.stopF + t.snapCorr)
                 {
                     const auto idx = (gfq - (t.stopF + t.snapCorr)) % tailLen;
-                    if (idx < t.capCount)
+                    if (t.loopOff + idx < t.capCount)
                     {
-                        xl = t.buf.getSample (0, (int) idx);
-                        xr = t.buf.getSample (1, (int) idx);
+                        xl = t.buf.getSample (0, (int) (t.loopOff + idx));
+                        xr = t.buf.getSample (1, (int) (t.loopOff + idx));
                     }
                 }
             }
@@ -1269,8 +1281,8 @@ bool Engine::saveSession (juce::OutputStream& os)
             {
                 lens[(size_t) i] = t.bufLen;
                 bufs[(size_t) i].setSize (2, (int) t.bufLen);
-                bufs[(size_t) i].copyFrom (0, 0, t.buf, 0, 0, (int) t.bufLen);
-                bufs[(size_t) i].copyFrom (1, 0, t.buf, 1, 0, (int) t.bufLen);
+                bufs[(size_t) i].copyFrom (0, 0, t.buf, 0, (int) t.loopOff, (int) t.bufLen);
+                bufs[(size_t) i].copyFrom (1, 0, t.buf, 1, (int) t.loopOff, (int) t.bufLen);
             }
         }
     }
@@ -1351,7 +1363,7 @@ bool Engine::loadSession (juce::InputStream& is)
                 t.muteG.setCurrentAndTargetValue (1.f);
                 t.pos.store (0.f);
             }
-            t.closing = false; t.jobId = -1; t.capCount = 0;
+            t.closing = false; t.jobId = -1; t.capCount = 0; t.loopOff = 0;
         }
         grid.on   = (bool) v.getProperty ("gridOn", false);
         grid.lenS = (double) v.getProperty ("gridLen", 0.0);

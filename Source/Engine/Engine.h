@@ -58,7 +58,9 @@ struct Track
     bool    gateOpen  = false;      // ÉCOUTE : bref silence requis avant d'accepter un son (anti queue) — s'ouvre seul après 1,5 s max
     juce::int64 armedF = 0;         // frame d'armement de l'écoute
     bool    onsetTake = false;      // prise calée sur l'attaque (longueur = N mesures exactes)
-    juce::int64 snapCorr = 0;       // recalage de pose : attaque aimantée sur le temps le plus proche
+    juce::int64 snapCorr = 0;
+    juce::int64 loopOff  = 0;       // index tampon du début de boucle (levée captée avant, hors boucle)
+    juce::int64 attackF  = 0;       // frame musicale de l'attaque (info toast)       // recalage de pose : attaque aimantée sur le temps le plus proche
     juce::int64 startF = 0, stopF = 0;   // frames "musicales"
     juce::int64 anchorF = 0;             // ancre de phase (playT0)
     int     jobId     = -1;
