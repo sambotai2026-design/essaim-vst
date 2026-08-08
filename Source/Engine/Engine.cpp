@@ -648,6 +648,83 @@ void Engine::finishRec (int idx)
 
         if (! grid.on)
         {
+            // ---- ARRONDI AU POULS (boucleur \u00e0 la vol\u00e9e) ----
+            // On d\u00e9tecte le tempo interne du take (autocorr\u00e9lation de l'enveloppe
+            // d'attaques, bornes 80-180 BPM avec d\u00e9sambigu\u00efsation demi/double),
+            // puis la longueur est arrondie au nombre ENTIER de temps le plus
+            // proche de ta fermeture : \u00e7a reboucle pile, comme tu l'as jou\u00e9.
+            {
+                const int hop = juce::jmax (32, (int) (sr / 250.0));
+                const auto Lraw = t.bufLen;
+                const int NE = (int) (Lraw / hop);
+                if (NE > 80)
+                {
+                    const auto* mL = t.buf.getReadPointer (0) + t.loopOff;
+                    const auto* mR = t.buf.getReadPointer (1) + t.loopOff;
+                    std::vector<float> env ((size_t) NE, 0.f), nov ((size_t) NE, 0.f);
+                    for (int i = 0; i < NE; ++i)
+                    {
+                        float acc = 0.f;
+                        const int b = i * hop;
+                        for (int j = 0; j < hop; j += 4)
+                            acc += std::abs (mL[b + j]) + std::abs (mR[b + j]);
+                        env[(size_t) i] = acc;
+                    }
+                    for (int i = 1; i < NE; ++i)
+                        nov[(size_t) i] = juce::jmax (0.f, env[(size_t) i] - env[(size_t) i - 1]);
+
+                    const int lagMin = juce::jmax (8,  (int) (0.28 * sr / hop));
+                    const int lagMax = juce::jmin (NE / 2, (int) (1.05 * sr / hop));
+                    double best = 0; int bl = -1;
+                    std::vector<double> rr ((size_t) juce::jmax (0, lagMax + 1), 0.0);
+                    for (int lag = lagMin; lag <= lagMax; ++lag)
+                    {
+                        double acc = 0;
+                        for (int i = lag; i < NE; ++i)
+                            acc += (double) nov[(size_t) i] * nov[(size_t) (i - lag)];
+                        rr[(size_t) lag] = acc;
+                        if (acc > best) { best = acc; bl = lag; }
+                    }
+                    if (bl > 0 && best > 0)
+                    {
+                        // d\u00e9sambigu\u00efsation demi/double vers 80-180 BPM
+                        const auto inBand = [&] (int lag) { const double p = lag * (double) hop / sr; return p >= 0.333 && p <= 0.75; };
+                        if (! inBand (bl))
+                        {
+                            if (bl / 2 >= lagMin && rr[(size_t) (bl / 2)] >= 0.6 * best && inBand (bl / 2)) bl /= 2;
+                            else if (bl * 2 <= lagMax && rr[(size_t) (bl * 2)] >= 0.6 * best && inBand (bl * 2)) bl *= 2;
+                        }
+                        const double P = (double) bl * hop;               // p\u00e9riode d'un temps (frames)
+                        const int k = (int) juce::jlimit (2, 128, (int) std::floor ((double) Lraw / P + 0.5));
+                        const auto L2 = (juce::int64) juce::jlimit (1.0, (double) (t.buf.getNumSamples() - t.loopOff - kXFadeFr),
+                                                                    std::floor (k * P + 0.5));
+                        if (std::abs ((double) (L2 - Lraw)) <= 0.18 * (double) Lraw && L2 > (juce::int64) (0.25 * sr))
+                        {
+                            t.bufLen = L2;
+                            t.durS   = (double) L2 / sr;
+                            const double bpmDet = 60.0 * sr / P;
+                            toastMsg = juce::String::fromUTF8 ("Boucle cal\u00e9e : ") + juce::String (k)
+                                     + juce::String::fromUTF8 (" temps \u2248 ") + juce::String (bpmDet, 1)
+                                     + " BPM (" + (L2 > Lraw ? "+" : "")
+                                     + juce::String ((L2 - Lraw) * 1000.0 / sr, 0) + " ms).";
+                        }
+                    }
+                }
+                // couture tête/queue \u00e0 la longueur d\u00e9finitive (message thread)
+                if (t.bufLen > kXFadeFr && t.loopOff + t.bufLen + kXFadeFr <= t.capCount)
+                {
+                    auto* bl2 = t.buf.getWritePointer (0);
+                    auto* br2 = t.buf.getWritePointer (1);
+                    const auto O = t.loopOff; const auto LL = t.bufLen;
+                    for (int j = 0; j < kXFadeFr; ++j)
+                    {
+                        const float w = std::sin (((float) (j + 1) / (kXFadeFr + 1)) * juce::MathConstants<float>::halfPi);
+                        const float u = std::cos (((float) (j + 1) / (kXFadeFr + 1)) * juce::MathConstants<float>::halfPi);
+                        bl2[(int) O + j] = bl2[(int) O + j] * w + bl2[(int) (O + LL) + j] * u;
+                        br2[(int) O + j] = br2[(int) O + j] * w + br2[(int) (O + LL) + j] * u;
+                    }
+                }
+            }
             gridFromBpm = false;
             const int nb = t.bars > 0 ? t.bars : 1;
             const auto barFexact = juce::jmax ((juce::int64) 1, (t.bufLen + nb / 2) / nb);
@@ -836,6 +913,23 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
         ring0[(size_t) ringW] = inL[q]; ring1[(size_t) ringW] = inR[q];
         ringW = (ringW + 1) % kRingLen;
     }
+    // enveloppes rapide (~2 ms) / lente (~40 ms) pour d\u00e9clencher sur un VRAI
+    // transitoire (kick, plosive) et pas sur une mont\u00e9e molle (souffle).
+    auto* eF = scratch.getWritePointer (0);
+    auto* eS = scratch.getWritePointer (1);
+    {
+        const float aF = juce::jmin (1.f, 1.f / (0.002f * (float) sr));
+        const float aS = juce::jmin (1.f, 1.f / (0.040f * (float) sr));
+        float f0 = envF, s0 = envS;
+        for (int q = 0; q < n; ++q)
+        {
+            const float m = juce::jmax (std::abs (inL[q]), std::abs (inR[q]));
+            f0 += aF * (m - f0);
+            s0 += aS * (m - s0);
+            eF[q] = f0; eS[q] = s0;
+        }
+        envF = f0; envS = s0;
+    }
     for (auto& t : tr)
     {
         if (t.st == St::Wait && t.jobId > 0)
@@ -852,7 +946,9 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
             int hit = -1;
             const float th = (float) thresh;
             for (int q = 0; q < n; ++q)
-                if (std::abs (inL[q]) >= th || std::abs (inR[q]) >= th) { hit = q; break; }
+                if (eF[q] >= th && eF[q] >= 3.f * eS[q]
+                    && (q > 0 ? eF[q - 1] < th : envF < th * 1.5f))
+                { hit = q; break; }
             if (hit >= 0)
             {
                 const auto onset = juce::jmax ((juce::int64) 0, b0 + hit - kPreRollFr);
@@ -922,6 +1018,7 @@ void Engine::runCaptureAndWatch (const float* inL, const float* inR, int n, juce
 
             auto blendHead = [this] (Track& tt)
             {
+                if (! (sync && grid.on)) return;   // longueur finale d\u00e9cid\u00e9e plus tard (arrondi au pouls)
                 // fondu enchaîné tête/queue : la fin capturée en trop (kXFadeFr frames)
                 // est fondue dans le début — plus de clic au point de bouclage.
                 const auto O = tt.loopOff;

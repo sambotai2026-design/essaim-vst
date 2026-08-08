@@ -212,7 +212,8 @@ private:
     double sr = 48000.0;
     std::atomic<juce::int64> gf { 0 };          // compteur global de frames
     std::atomic<float> inPeak { 0.f }, inVuA { 0.f }, masterVuA { 0.f };
-    std::atomic<juce::int64> lastAboveF { -1000000000LL };   // dernier bloc où l'entrée dépassait le seuil
+    std::atomic<juce::int64> lastAboveF { -1000000000LL };
+    float envF = 0.f, envS = 0.f;       // enveloppes rapide/lente (détection de transitoire)   // dernier bloc où l'entrée dépassait le seuil
 
     // ---- ANTI-RETOUR : soustraction de la propre sortie (annulation d'écho) ----
     std::atomic<bool>  aecOn { true };
